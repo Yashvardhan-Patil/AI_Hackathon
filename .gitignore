@@ -1,0 +1,28 @@
+# Environment variables (contains your API keys!)
+.env
+
+# Dependencies
+node_modules/
+
+# Build output
+dist-renderer/
+dist/
+dist-electron/
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+sample-logs/
+
+# Misc
+.cache/

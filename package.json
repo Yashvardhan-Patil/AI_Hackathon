@@ -1,0 +1,54 @@
+{
+  "name": "api-debugging-copilot",
+  "version": "1.0.0",
+  "description": "A compact Electron.js desktop AI assistant for API debugging",
+  "main": "src/main/main.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:renderer\" \"npm run dev:electron\"",
+    "dev:renderer": "vite --port 5173",
+    "dev:electron": "wait-on http://localhost:5173 && electron .",
+    "dev:backend": "node src/backend/server.js",
+    "build:renderer": "vite build",
+    "build": "npm run build:renderer && electron-builder",
+    "start": "electron .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "electron-store": "^8.2.0",
+    "express": "^4.21.0",
+    "groq-sdk": "^0.8.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "socket.io": "^4.7.5",
+    "socket.io-client": "^4.7.5",
+    "chokidar": "^3.6.0",
+    "uuid": "^10.0.0",
+    "lucide-react": "^0.441.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^8.2.2",
+    "electron": "^32.1.0",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13",
+    "vite": "^5.4.8",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.apidebugging.copilot",
+    "productName": "API Debugging Copilot",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "src/main/**/*",
+      "src/preload/**/*",
+      "dist-renderer/**/*",
+      "src/backend/**/*"
+    ]
+  }
+}
