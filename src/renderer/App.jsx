@@ -4,6 +4,8 @@ import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
 import LogsPanel from './components/LogsPanel';
 import ApiHealth from './components/ApiHealth';
+import AnomalyFeed from './components/AnomalyFeed';
+import AlertHistory from './components/AlertHistory';
 import Settings from './components/Settings';
 import Toast from './components/Toast';
 import TitleBar from './components/TitleBar';
@@ -12,8 +14,10 @@ const SOCKET_URL = 'http://localhost:3001';
 
 const TABS = [
   { id: 'assistant', label: 'Assistant', icon: 'Bot' },
+  { id: 'anomalies', label: 'Anomalies', icon: 'AlertTriangle' },
   { id: 'logs', label: 'Logs', icon: 'Terminal' },
   { id: 'health', label: 'API Health', icon: 'Activity' },
+  { id: 'history', label: 'Alert History', icon: 'History' },
   { id: 'settings', label: 'Settings', icon: 'Settings' },
 ];
 
@@ -208,6 +212,14 @@ function App() {
             addToast={addToast}
           />
         );
+      case 'anomalies':
+        return (
+          <AnomalyFeed
+            socket={socket}
+            connected={connected}
+            addToast={addToast}
+          />
+        );
       case 'logs':
         return (
           <LogsPanel
@@ -218,7 +230,9 @@ function App() {
           />
         );
       case 'health':
-        return <ApiHealth socket={socket} connected={connected} />;
+        return <ApiHealth socket={socket} connected={connected} addToast={addToast} />;
+      case 'history':
+        return <AlertHistory socket={socket} connected={connected} />;
       case 'settings':
         return (
           <Settings

@@ -1,11 +1,13 @@
 import React from 'react';
-import { Bot, Terminal, Activity, Settings, FolderOpen, FileCode, ExternalLink, Code } from 'lucide-react';
+import { Bot, Terminal, Activity, Settings, AlertTriangle, History, FolderOpen, FileCode, ExternalLink, Code } from 'lucide-react';
 
 const ICON_MAP = {
   Bot: Bot,
   Terminal: Terminal,
   Activity: Activity,
   Settings: Settings,
+  AlertTriangle: AlertTriangle,
+  History: History,
 };
 
 function Sidebar({ tabs, activeTab, onTabChange, connected, projectPath, onSelectProject, onOpenInVSCode, onOpenStarterFile }) {

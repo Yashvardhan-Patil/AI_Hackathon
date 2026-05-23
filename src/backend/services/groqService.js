@@ -92,6 +92,20 @@ async function sendMessage(messages, contextData = {}) {
       });
     }
 
+    if (contextData.anomalyAnalysis) {
+      formattedMessages.push({
+        role: 'system',
+        content: `You are analyzing an API anomaly. Focus on:\n1. Identifying the ROOT CAUSE of the issue\n2. Assessing the IMPACT on users\n3. Providing actionable FIX steps\n4. Suggesting PREVENTION measures\n\nBe concise and specific. Use this format when relevant:\nSEVERITY: CRITICAL|HIGH|MEDIUM|LOW\nROOT_CAUSE: explanation\nIMPACT: user impact description\nFIX: step-by-step fix\nSUGGESTION: prevention measure`,
+      });
+    }
+
+    if (contextData.batchAnalysis) {
+      formattedMessages.push({
+        role: 'system',
+        content: `You are analyzing a batch of API anomalies. Provide:\n1. Pattern analysis - are these related?\n2. Root cause for each distinct issue\n3. Prioritized fix recommendations\n\nGroup related issues together. Use the format:\n---\nSEVERITY: CRITICAL|HIGH|MEDIUM|LOW\nROOT_CAUSE: explanation\nIMPACT: user impact\nFIX: step\nSUGGESTION: prevention\n---`,
+      });
+    }
+
     const completion = await client.chat.completions.create({
       messages: formattedMessages,
       model,

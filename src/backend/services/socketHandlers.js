@@ -3,9 +3,19 @@ const logParser = require('./logParser');
 const FileMonitor = require('./fileMonitor');
 const codeService = require('./codeService');
 const IntentRouter = require('./intentRouter');
+const anomalyDetector = require('./anomalyDetector');
+const alertManager = require('./alertManager');
+const endpointMonitor = require('./endpointMonitor');
+const autoAnalyzer = require('./autoAnalyzer');
 const logger = require('../utils/logger');
 
 let fileMonitor = null;
+const MONITORED_ENDPOINTS = [
+  { method: 'GET', path: '/api/users', name: 'GET /api/users', url: 'http://localhost:3001/health' },
+  { method: 'GET', path: '/api/products', name: 'GET /api/products', url: 'http://localhost:3001/api/status' },
+  { method: 'POST', path: '/api/auth/login', name: 'POST /api/auth/login', url: 'http://localhost:3001/health' },
+  { method: 'GET', path: '/api/analytics', name: 'GET /api/analytics', url: 'http://localhost:3001/health' },
+];
 
 function setupSocketHandlers(io) {
   fileMonitor = new FileMonitor(io);
@@ -19,6 +29,10 @@ function setupSocketHandlers(io) {
       timestamp: new Date().toISOString(),
       watchedPaths: fileMonitor.getWatchedPaths(),
     });
+
+    // Send current alert state
+    socket.emit('alerts:state', alertManager.getActiveAlerts());
+    socket.emit('alerts:history', alertManager.getAlertHistory({ limit: 50 }));
 
     // ==================== CHAT — NATURAL LANGUAGE FILE ACCESS ====================
     // ALL messages go through this handler. No commands, no special syntax.
@@ -332,17 +346,134 @@ function setupSocketHandlers(io) {
       socket.emit('logs:file-content', result);
     });
 
+    // ==================== ANOMALY & ALERT EVENTS ====================
+
+    // Get active alerts
+    socket.on('alerts:get-active', (data) => {
+      const result = alertManager.getActiveAlerts(data || {});
+      socket.emit('alerts:state', result);
+    });
+
+    // Get alert history
+    socket.on('alerts:get-history', (data) => {
+      const result = alertManager.getAlertHistory(data || {});
+      socket.emit('alerts:history', result);
+    });
+
+    // Resolve an alert
+    socket.on('alerts:resolve', (data) => {
+      const result = alertManager.resolveAlert(data.alertId);
+      socket.emit('alerts:resolved', result);
+      // Broadcast updated state
+      io.emit('alerts:state', alertManager.getActiveAlerts());
+      io.emit('alerts:history', alertManager.getAlertHistory({ limit: 50 }));
+    });
+
+    // Resolve all alerts for an endpoint
+    socket.on('alerts:resolve-endpoint', (data) => {
+      const result = alertManager.resolveAlertsForEndpoint(data.endpoint);
+      socket.emit('alerts:resolved', result);
+      io.emit('alerts:state', alertManager.getActiveAlerts());
+      io.emit('alerts:history', alertManager.getAlertHistory({ limit: 50 }));
+    });
+
+    // Get anomaly detector recurring errors
+    socket.on('alerts:get-recurring', () => {
+      const errors = anomalyDetector.getRecurringErrors();
+      socket.emit('alerts:recurring-errors', errors);
+    });
+
+    // Manually trigger anomaly analysis on a log file
+    socket.on('logs:analyze-anomalies', async (data) => {
+      try {
+        socket.emit('chat:typing', true);
+
+        const parsed = data.parsedLog || logParser.parseLogFile(data.filePath);
+        const analysisResult = anomalyDetector.analyzeLogFile(parsed);
+
+        if (analysisResult.totalAnomalies > 0) {
+          // Process each anomaly into alerts
+          const alerts = [];
+          for (const anomaly of analysisResult.anomalies) {
+            const alert = alertManager.processAnomaly(anomaly);
+            if (alert) alerts.push(alert);
+          }
+
+          // Auto-analyze with AI
+          const aiAnalysis = await autoAnalyzer.analyzeBatch(analysisResult.anomalies);
+
+          // Broadcast alert updates
+          io.emit('alerts:state', alertManager.getActiveAlerts());
+
+          socket.emit('logs:anomaly-analysis', {
+            ...analysisResult,
+            aiAnalysis,
+            alertsProcessed: alerts.length,
+          });
+
+          // Send anomaly toast to all clients
+          io.emit('anomaly:new', {
+            count: analysisResult.totalAnomalies,
+            summary: analysisResult.summary,
+            criticalCount: Object.values(analysisResult.groups).reduce(
+              (s, arr) => s + arr.filter(a => a.severity === 'critical').length, 0
+            ),
+            timestamp: new Date().toISOString(),
+          });
+        } else {
+          socket.emit('logs:anomaly-analysis', {
+            totalAnomalies: 0,
+            anomalies: [],
+            groups: {},
+            summary: 'No anomalies detected',
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (error) {
+        logger.error('Anomaly analysis error:', error.message);
+        socket.emit('logs:anomaly-analysis-error', { message: error.message });
+      } finally {
+        socket.emit('chat:typing', false);
+      }
+    });
+
     // ==================== HEALTH EVENTS ====================
 
-    // API health check simulation
+    // Get endpoint health status (real data)
     socket.on('health:check', () => {
-      const healthData = {
+      const status = endpointMonitor.getStatus();
+      socket.emit('health:status', {
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
         memory: process.memoryUsage(),
-        monitoredEndpoints: generateMockEndpoints(),
-      };
-      socket.emit('health:status', healthData);
+        monitoredEndpoints: status.endpoints,
+        ...status,
+      });
+    });
+
+    // Add an endpoint to monitor
+    socket.on('health:add-endpoint', (data) => {
+      const result = endpointMonitor.addEndpoint(data.url, {
+        method: data.method || 'GET',
+        name: data.name || data.url,
+        path: data.path || '/',
+      });
+      socket.emit('health:endpoint-added', { success: true, url: data.url });
+    });
+
+    // Remove an endpoint from monitoring
+    socket.on('health:remove-endpoint', (data) => {
+      const result = endpointMonitor.removeEndpoint(data.url);
+      socket.emit('health:endpoint-removed', { success: result, url: data.url });
+    });
+
+    // Reset anomaly detector and alert manager
+    socket.on('anomaly:reset', () => {
+      anomalyDetector.reset();
+      alertManager.reset();
+      io.emit('alerts:state', alertManager.getActiveAlerts());
+      io.emit('alerts:history', alertManager.getAlertHistory({ limit: 50 }));
+      socket.emit('anomaly:reset-complete', { message: 'All anomaly data reset' });
     });
 
     // ==================== SETTINGS EVENTS ====================
@@ -378,19 +509,4 @@ function setupSocketHandlers(io) {
   });
 }
 
-function generateMockEndpoints() {
-  const endpoints = [
-    { method: 'GET', path: '/api/users', status: 'healthy', latency: '45ms', lastChecked: new Date().toISOString() },
-    { method: 'POST', path: '/api/users', status: 'healthy', latency: '120ms', lastChecked: new Date().toISOString() },
-    { method: 'GET', path: '/api/products', status: 'healthy', latency: '30ms', lastChecked: new Date().toISOString() },
-    { method: 'PUT', path: '/api/orders/:id', status: 'degraded', latency: '350ms', lastChecked: new Date().toISOString() },
-    { method: 'DELETE', path: '/api/cache/flush', status: 'down', latency: '5000ms', lastChecked: new Date().toISOString() },
-    { method: 'GET', path: '/api/analytics', status: 'healthy', latency: '60ms', lastChecked: new Date().toISOString() },
-    { method: 'POST', path: '/api/auth/login', status: 'healthy', latency: '85ms', lastChecked: new Date().toISOString() },
-    { method: 'GET', path: '/api/notifications', status: 'degraded', latency: '280ms', lastChecked: new Date().toISOString() },
-  ];
-
-  return endpoints;
-}
-
-module.exports = { setupSocketHandlers };
+module.exports = { setupSocketHandlers, MONITORED_ENDPOINTS };

@@ -7,9 +7,8 @@ import {
   XCircle,
   Clock,
   Server,
-  ArrowUp,
-  ArrowDown,
-  Minus,
+  Plus,
+  Trash2,
 } from 'lucide-react';
 
 const STATUS_CONFIG = {
@@ -36,10 +35,18 @@ const STATUS_CONFIG = {
   },
 };
 
-function ApiHealth({ socket, connected }) {
+const DEFAULT_ENDPOINTS = [
+  { url: 'http://localhost:3001/health', method: 'GET', name: 'Health Check', path: '/health' },
+  { url: 'http://localhost:3001/api/status', method: 'GET', name: 'API Status', path: '/api/status' },
+];
+
+function ApiHealth({ socket, connected, addToast }) {
   const [endpoints, setEndpoints] = useState([]);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [addUrl, setAddUrl] = useState('');
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [uptime, setUptime] = useState(100);
 
   const fetchHealth = useCallback(() => {
     if (!socket) return;
@@ -53,6 +60,7 @@ function ApiHealth({ socket, connected }) {
     const handleHealthStatus = (data) => {
       setEndpoints(data.monitoredEndpoints || []);
       setLastUpdated(data.timestamp);
+      setUptime(data.uptime || 100);
       setIsRefreshing(false);
     };
 
@@ -72,7 +80,22 @@ function ApiHealth({ socket, connected }) {
     return () => clearInterval(interval);
   }, [fetchHealth]);
 
+  const handleAddEndpoint = () => {
+    if (!socket || !addUrl.trim()) return;
+    socket.emit('health:add-endpoint', { url: addUrl.trim(), method: 'GET', name: addUrl.trim() });
+    setAddUrl('');
+    setShowAddForm(false);
+    addToast('Endpoint added — will show on next check', 'info');
+  };
+
+  const handleRemoveEndpoint = (url) => {
+    if (!socket) return;
+    socket.emit('health:remove-endpoint', { url });
+    addToast('Endpoint removed', 'info');
+  };
+
   const getLatencyColor = (latency) => {
+    if (!latency || latency === 'N/A') return 'text-gray-500';
     const ms = parseInt(latency);
     if (ms < 100) return 'text-success';
     if (ms < 300) return 'text-warning';
@@ -85,10 +108,6 @@ function ApiHealth({ socket, connected }) {
     degraded: endpoints.filter((e) => e.status === 'degraded').length,
     down: endpoints.filter((e) => e.status === 'down').length,
   };
-
-  const uptime = stats.total > 0
-    ? Math.round(((stats.healthy + stats.degraded * 0.5) / stats.total) * 100)
-    : 100;
 
   return (
     <div className="flex flex-col h-full space-y-3">
@@ -133,7 +152,7 @@ function ApiHealth({ socket, connected }) {
         </div>
       </div>
 
-      {/* Endpoint List */}
+      {/* Controls */}
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-medium text-gray-300">Monitored Endpoints</h3>
         <div className="flex items-center gap-2">
@@ -153,8 +172,36 @@ function ApiHealth({ socket, connected }) {
           >
             <RefreshCw size={13} />
           </button>
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="p-1.5 rounded-lg text-gray-500 hover:text-accent-400 hover:bg-accent-500/10 transition-all"
+            title="Add endpoint"
+          >
+            <Plus size={13} />
+          </button>
         </div>
       </div>
+
+      {/* Add Endpoint Form */}
+      {showAddForm && (
+        <div className="flex items-center gap-2 p-2 glass-panel">
+          <input
+            type="text"
+            value={addUrl}
+            onChange={(e) => setAddUrl(e.target.value)}
+            placeholder="http://localhost:3000/health"
+            className="flex-1 px-2.5 py-1.5 bg-dark-800 border border-white/5 rounded-lg text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-accent-500/50"
+            onKeyDown={(e) => e.key === 'Enter' && handleAddEndpoint()}
+          />
+          <button
+            onClick={handleAddEndpoint}
+            disabled={!addUrl.trim()}
+            className="px-2.5 py-1.5 text-xs font-medium text-white bg-accent-500 rounded-lg hover:bg-accent-600 transition-all disabled:opacity-30"
+          >
+            Add
+          </button>
+        </div>
+      )}
 
       {/* Endpoints */}
       <div className="flex-1 overflow-y-auto space-y-1">
@@ -177,7 +224,7 @@ function ApiHealth({ socket, connected }) {
                 className={`group flex items-center gap-3 p-2.5 rounded-xl border ${config.border} ${config.bg} hover:bg-white/[0.02] transition-all`}
               >
                 {/* Method Badge */}
-                <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold ${
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold flex-shrink-0 ${
                   ep.method === 'GET' ? 'text-success bg-success/10' :
                   ep.method === 'POST' ? 'text-info bg-info/10' :
                   ep.method === 'PUT' ? 'text-warning bg-warning/10' :
@@ -189,16 +236,23 @@ function ApiHealth({ socket, connected }) {
 
                 {/* Path */}
                 <span className="flex-1 text-xs text-gray-300 font-mono truncate">
-                  {ep.path}
+                  {ep.path || ep.name}
                 </span>
 
                 {/* Latency */}
                 <div className="flex items-center gap-1">
                   <Clock size={10} className="text-gray-600" />
                   <span className={`text-[10px] font-mono ${getLatencyColor(ep.latency)}`}>
-                    {ep.latency}
+                    {ep.latency || 'N/A'}
                   </span>
                 </div>
+
+                {/* Uptime */}
+                {ep.uptime !== undefined && (
+                  <span className={`text-[10px] font-mono ${ep.uptime >= 95 ? 'text-success' : ep.uptime >= 80 ? 'text-warning' : 'text-error'}`}>
+                    {ep.uptime}%
+                  </span>
+                )}
 
                 {/* Status */}
                 <div className="flex items-center gap-1">
@@ -207,6 +261,15 @@ function ApiHealth({ socket, connected }) {
                     {config.label}
                   </span>
                 </div>
+
+                {/* Remove Button */}
+                <button
+                  onClick={() => handleRemoveEndpoint(ep.url || ep.path)}
+                  className="p-1 rounded text-gray-600 hover:text-error hover:bg-error/10 transition-all opacity-0 group-hover:opacity-100"
+                  title="Remove endpoint"
+                >
+                  <Trash2 size={11} />
+                </button>
               </div>
             );
           })
