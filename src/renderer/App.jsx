@@ -109,6 +109,32 @@ function App() {
       }
     });
 
+    // Auto-fix notifications — show a toast when code is auto-fixed
+    newSocket.on('auto-fix:result', (data) => {
+      if (data && data.fixes && data.fixes.length > 0) {
+        const successFixes = data.fixes.filter(f => f.success);
+        if (successFixes.length > 0) {
+          const files = successFixes.map(f => f.filePath.split('/').pop()).join(', ');
+          addToast(`🔧 Auto-fixed ${files}`, 'success');
+        }
+        const failedFixes = data.fixes.filter(f => !f.success);
+        if (failedFixes.length > 0) {
+          const failedFiles = failedFixes.map(f => f.filePath.split('/').pop()).join(', ');
+          addToast(`⚠️ Auto-fix failed for ${failedFiles}`, 'error');
+        }
+      }
+    });
+
+    // Anomaly analysis with auto-fix results
+    newSocket.on('logs:anomaly-analysis', (data) => {
+      if (data && data.autoFixResults && data.autoFixResults.length > 0) {
+        const totalFixes = data.autoFixResults.reduce((sum, r) => sum + (r.successCount || 0), 0);
+        if (totalFixes > 0) {
+          addToast(`🔧 Auto-fixed ${totalFixes} file(s) based on anomaly analysis`, 'success');
+        }
+      }
+    });
+
     setSocket(newSocket);
 
     return () => {

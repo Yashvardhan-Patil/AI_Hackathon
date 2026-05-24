@@ -82,7 +82,7 @@ const onEndpointAlert = async (anomaly) => {
       });
 
       if (alert) {
-        // Auto-analyze with AI
+        // Auto-analyze with AI (also triggers auto-fixing internally via _triggerAutoFix)
         autoAnalyzer.analyzeAnomaly(anomaly).then(analysis => {
           // Broadcast AI-powered analysis
           io.emit('anomaly:ai-analysis', {

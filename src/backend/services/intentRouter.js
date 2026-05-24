@@ -1,5 +1,6 @@
 const logger = require('../utils/logger');
 const codeService = require('./codeService');
+const webService = require('./webService');
 
 /**
  * Intent Router — Analyzes natural language messages and intelligently routes them
@@ -45,6 +46,14 @@ class IntentRouter {
   static RUN_PATTERNS = [
     /\b(run|execute|start|launch|invoke|call)\s+/i,
     /^(run|execute|start|launch)\s+/i,
+  ];
+
+  static WEB_PATTERNS = [
+    /\b(search|find|look\s*up|google|bing|duckduckgo|browse|navigate|open\s+(url|website|site|page|link))\b/i,
+    /\b(https?:\/\/[^\s]+)/i,
+    /\b(what'?s?\s+(new|the\s+latest|happening)|(latest|recent|current)\s+(news|trends|updates))\b/i,
+    /\b(youtube|you\s*tube|yt\s*video)\b/i,
+    /\b(watch|play|stream)\s+(a\s+|the\s+)?(video|youtube)\b/i,
   ];
 
   static ANALYZE_PATTERNS = [
@@ -98,6 +107,51 @@ class IntentRouter {
           secondaryQuery: this.getRemainingTextAfterAction(trimmed, ['open']),
         };
       }
+    }
+
+    // Check for web search / URL fetch intent (MUST come before read patterns
+    // to avoid treating URLs like "youtube.com" as file paths)
+    const webMatch = this.matchesPattern(trimmed, this.WEB_PATTERNS);
+    if (webMatch) {
+      // Use webService.classifyInput to detect URLs (including bare domains like youtube.com)
+      const classified = webService.classifyInput(trimmed);
+
+      if (classified.type === 'url') {
+        const fetchResult = await webService.fetchUrl(classified.url);
+        if (fetchResult.success) {
+          return {
+            type: 'web',
+            query: trimmed,
+            webResult: fetchResult,
+            operationResult: fetchResult,
+          };
+        }
+      }
+
+      // Extract search query (remove prefixes like "search for", "find", etc.)
+      let searchQuery = classified.type === 'search'
+        ? classified.query
+        : trimmed
+            .replace(/^(search|find|look\s*up|google|browse)\s+(for\s+|the\s+)?/i, '')
+            .replace(/[.,!?]+$/, '')
+            .trim();
+
+      if (searchQuery && searchQuery.length > 2) {
+        const searchResult = await webService.searchWeb(searchQuery);
+        return {
+          type: 'web',
+          query: trimmed,
+          webResult: searchResult,
+          operationResult: searchResult,
+        };
+      }
+
+      // Still pass to AI chat with context
+      return {
+        type: 'chat',
+        query: trimmed,
+        fileContext: `Web search requested but no query could be extracted.`,
+      };
     }
 
     // Check for file read intent

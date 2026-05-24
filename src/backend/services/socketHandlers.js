@@ -7,6 +7,7 @@ const anomalyDetector = require('./anomalyDetector');
 const alertManager = require('./alertManager');
 const endpointMonitor = require('./endpointMonitor');
 const autoAnalyzer = require('./autoAnalyzer');
+const autoFixer = require('./autoFixer');
 const logger = require('../utils/logger');
 
 let fileMonitor = null;
@@ -63,17 +64,49 @@ function setupSocketHandlers(io) {
             result.actionType = 'read';
             break;
 
-          // ===== FIX FILE — read + AI analyzes + suggests fix =====
+          // ===== FIX FILE — read + AI analyzes + APPLIES the fix automatically =====
           case 'fix':
-            // Inject file content directly into messages so AI can analyze it
+            // Inject file content into messages and instruct AI to output the fixed code
             const fixMessages = [
-              { role: 'system', content: `The user wants to fix this file. File content of ${intent.filePath}:\n\`\`\`\n${intent.fileContent}\n\`\`\`\n\nIdentify bugs, errors, or issues. Suggest specific fixes.\n\n${intent.query ? `User's specific request: ${intent.query}` : ''}` },
+              { role: 'system', content: `The user wants to fix this file. File content of ${intent.filePath}:\n\`\`\`\n${intent.fileContent}\n\`\`\`\n\nIdentify bugs, errors, or issues and output the COMPLETE fixed file inside a code block.\n\n${intent.query ? `User's specific request: ${intent.query}` : 'Fix all bugs and issues in this file.'}` },
               ...(data.messages || []),
             ];
-            result = await groqService.sendMessage(fixMessages, { query: intent.query || `Fix bugs in ${intent.filePath}` });
-            result.filePath = intent.filePath;
-            result.fileContent = intent.fileContent;
-            result.actionType = 'fix';
+            const fixResponse = await groqService.sendMessage(fixMessages, { query: intent.query || `Fix bugs in ${intent.filePath}` });
+
+            // Extract code block from AI response and apply the fix
+            let fixApplyResult = { success: false, error: 'AI did not generate a fix' };
+            let fixApplied = false;
+            if (fixResponse.content) {
+              const codeBlockMatch = fixResponse.content.match(/\`\`\`(?:\w+)?\n([\s\S]*?)\`\`\`/);
+              if (codeBlockMatch && codeBlockMatch[1].trim().length > 10) {
+                fixApplyResult = codeService.writeFile(intent.filePath, codeBlockMatch[1].trim());
+                fixApplied = fixApplyResult.success;
+              } else {
+                // No code block found — inform user but still return the analysis
+                fixApplyResult = { success: false, error: 'AI response did not include a code block with the fix' };
+              }
+            }
+
+            result = {
+              ...fixResponse,
+              actionType: 'fix',
+              filePath: fixApplyResult.success ? fixApplyResult.relativePath : intent.filePath,
+              fixApplied,
+              fixResult: fixApplyResult,
+              fileContent: intent.fileContent,
+            };
+
+            // Notify frontend about the fix
+            if (fixApplied) {
+              io.emit('auto-fix:result', {
+                fixes: [{ filePath: intent.filePath, success: true, message: fixApplyResult.message }],
+                fixCount: 1,
+                successCount: 1,
+                failureCount: 0,
+                anomalyType: 'chat_fix',
+                timestamp: new Date().toISOString(),
+              });
+            }
             break;
 
           // ===== CREATE FILE — AI generates content, backend writes it =====
@@ -142,6 +175,50 @@ function setupSocketHandlers(io) {
               command: intent.command,
             };
             break;
+
+          // ===== WEB SEARCH / URL FETCH / OPEN IN BROWSER =====
+          case 'web': {
+            let webContent;
+            let browserOpened = false;
+
+            // Check if user explicitly asked to OPEN in browser (vs just search/fetch)
+            const wantsOpenInBrowser = /\b(open|go\s+to|launch|start)\s+(in\s+)?(browser|chrome|edge|firefox|safari)?/i.test(intent.query || query);
+
+            if (intent.webResult?.success) {
+              const result = intent.webResult;
+
+              // If it's a URL and user wants to open in browser, do that
+              if (result.url && (wantsOpenInBrowser || /\b(open|go\s+to|launch)\b/i.test(intent.query || query))) {
+                const browserResult = await webService.openInBrowser(result.url);
+                browserOpened = browserResult.success;
+              }
+
+              // Build content for AI analysis
+              if (result.text) {
+                webContent = `Title: ${result.title || 'N/A'}\nURL: ${result.url || 'N/A'}\n\nContent:\n${result.text.substring(0, 6000)}`;
+              } else if (result.snippets?.length > 0) {
+                webContent = `Search results for "${result.query || ''}":\n\n${result.snippets.map((s, i) => `${i + 1}. ${s.title}\n   ${s.url}\n   ${s.snippet}`).join('\n\n')}`;
+              } else {
+                webContent = `Fetched content from ${result.url || 'web'}:\n\n${(result.rawText || 'No content available').substring(0, 4000)}`;
+              }
+
+              // Append browser status
+              if (browserOpened) {
+                webContent += `\n\n[✓ URL opened in your default browser]`;
+              }
+            } else {
+              webContent = `Web fetch failed: ${intent.webResult?.error || 'Unknown error'}`;
+            }
+
+            result = await groqService.sendMessage([
+              { role: 'system', content: `The user asked to search or access the web. Here is the result:\n\n${webContent}\n\nPlease answer the user's question based on this information.` },
+              { role: 'user', content: intent.query || query },
+            ]);
+            result.actionType = 'web';
+            result.webResult = intent.webResult;
+            result.browserOpened = browserOpened;
+            break;
+          }
 
           // ===== OPEN IN VSCODE =====
           case 'vscode':
@@ -402,12 +479,39 @@ function setupSocketHandlers(io) {
           // Auto-analyze with AI
           const aiAnalysis = await autoAnalyzer.analyzeBatch(analysisResult.anomalies);
 
+          // Auto-fix critical and high severity anomalies
+          const fixableAnomalies = analysisResult.anomalies.filter(
+            a => (a.severity === 'critical' || a.severity === 'high') && !autoFixer.wasRecentlyFixed(a)
+          );
+          const fixResults = [];
+          const projectPath = codeService.getProjectPath();
+          if (projectPath && fixableAnomalies.length > 0) {
+            for (const anomaly of fixableAnomalies.slice(0, 3)) {  // Max 3 auto-fixes per batch
+              try {
+                // Include parsed log context if available
+                const logContext = data.parsedLog?.entries
+                  ?.filter(e => e.type === 'error')
+                  ?.slice(0, 5)
+                  ?.map(e => `[${e.timestamp || ''}] ${e.content}`)
+                  ?.join('\n') || '';
+                const fixResult = await autoFixer.autoFix(anomaly, projectPath, logContext);
+                if (fixResult.success) {
+                  fixResults.push(fixResult.result);
+                  logger.info(`SocketHandler: Auto-fix applied for ${anomaly.type} — ${fixResult.result.successCount} file(s)`);
+                }
+              } catch (fixErr) {
+                logger.error('SocketHandler: Auto-fix error:', fixErr.message);
+              }
+            }
+          }
+
           // Broadcast alert updates
           io.emit('alerts:state', alertManager.getActiveAlerts());
 
           socket.emit('logs:anomaly-analysis', {
             ...analysisResult,
             aiAnalysis,
+            autoFixResults: fixResults.length > 0 ? fixResults : undefined,
             alertsProcessed: alerts.length,
           });
 
