@@ -1,6 +1,4 @@
 const groqService = require('./groqService');
-const autoFixer = require('./autoFixer');
-const codeService = require('./codeService');
 const logger = require('../utils/logger');
 
 /**
@@ -66,15 +64,6 @@ class AutoAnalyzer {
       this.analysisCache.set(cacheKey, { result: analysis, timestamp: Date.now() });
 
       logger.info(`AutoAnalyzer: Analysis complete for ${anomaly.type} on ${anomaly.endpoint || 'unknown'}`);
-
-      // Trigger auto-fixing in the background (don't await — don't block the response)
-      this._triggerAutoFix(anomaly, analysis).then(fixResult => {
-        if (fixResult && fixResult.success) {
-          logger.info(`AutoAnalyzer: Background auto-fix completed — ${fixResult.result.successCount} file(s) updated`);
-        }
-      }).catch(err => {
-        logger.error('AutoAnalyzer: Background auto-fix error:', err.message);
-      });
 
       return { success: true, result: analysis };
     } catch (error) {
@@ -283,51 +272,6 @@ SUGGESTION: [prevention measure]
   /**
    * Clear analysis cache
    */
-  /**
-   * After analysis, trigger auto-fixing for fixable anomalies.
-   */
-  async _triggerAutoFix(anomaly, analysis) {
-    const projectPath = codeService.getProjectPath();
-    if (!projectPath) {
-      logger.info('AutoAnalyzer: No project path set, skipping auto-fix');
-      return;
-    }
-
-    // Don't re-fix if recently attempted
-    if (autoFixer.wasRecentlyFixed(anomaly)) {
-      logger.info('AutoAnalyzer: Anomaly was recently fixed, skipping');
-      return;
-    }
-
-    // Only auto-fix high or critical severity anomalies
-    const severity = anomaly.severity || 'medium';
-    if (severity !== 'critical' && severity !== 'high') {
-      logger.info(`AutoAnalyzer: Severity too low for auto-fix (${severity}), skipping`);
-      return;
-    }
-
-    // Also skip if analysis says the root cause is infrastructure (not code)
-    const rootCause = analysis.rootCause || '';
-    const infrastructureKeywords = ['infrastructure', 'network', 'dns', 'hardware', 'memory', 'disk', 'server overload', 'traffic spike', 'ddos', 'cloud provider', 'load balancer'];
-    const isInfra = infrastructureKeywords.some(kw => rootCause.toLowerCase().includes(kw));
-    if (isInfra) {
-      logger.info('AutoAnalyzer: Root cause appears infrastructure-related, skipping auto-fix');
-      return;
-    }
-
-    logger.info(`AutoAnalyzer: Triggering auto-fix for ${anomaly.type} (${severity})`);
-    const fixResult = await autoFixer.autoFix(anomaly, projectPath);
-
-    if (fixResult.success) {
-      logger.info(`AutoAnalyzer: Auto-fix succeeded — ${fixResult.result.successCount} file(s) updated`);
-      // An event will be emitted by the caller (server.js / socketHandlers)
-    } else if (!fixResult.skipped) {
-      logger.info(`AutoAnalyzer: Auto-fix failed or wasn't possible: ${fixResult.error}`);
-    }
-
-    return fixResult;
-  }
-
   clearCache() {
     this.analysisCache.clear();
     logger.info('AutoAnalyzer: Cache cleared');

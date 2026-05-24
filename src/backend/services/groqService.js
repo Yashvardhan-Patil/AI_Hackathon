@@ -9,7 +9,11 @@ function getClient() {
     if (!apiKey || apiKey === 'gsk_your_groq_api_key_here') {
       return null;
     }
-    groqClient = new Groq({ apiKey });
+    // CRITICAL: Disable SDK's built-in retries (default: 2 retries for 429 errors).
+    // The SDK's retries fire rapidly (~500ms apart), compounding 3+ calls per queue slot.
+    // Our own queue handles ALL retry logic with proper 2.5s spacing.
+    // Also: using small model (8B) for 14,400 RPD instead of 1,000 RPD on 70B.
+    groqClient = new Groq({ apiKey, maxRetries: 0 });
   }
   return groqClient;
 }
@@ -17,17 +21,26 @@ function getClient() {
 // ========================
 // GLOBAL RATE-LIMIT QUEUE
 // ========================
-// Enforces minimum 2s gap between API calls to stay well under Groq's
+// Enforces minimum gap between API calls to stay well under Groq's
 // 30 RPM free-tier limit. Also auto-retries 429 (rate limit) errors
 // with exponential backoff instead of failing immediately.
+//
+// SAFETY FEATURES:
+// - Safety timeout: if a request takes > 30s, isProcessing resets to
+//   prevent permanent queue lockup
+// - Max queue size: prevents unbounded memory growth
+// - Non-object error handling: crashes in catch blocks won't break the queue
 //
 // All calls to sendMessage() go through this queue transparently.
 // ========================
 const requestQueue = [];
 let isProcessing = false;
 let lastRequestTime = 0;
-const MINIMUM_GAP_MS = 2200; // ~27 RPM max, safe margin under 30 RPM limit
+let processingSince = 0;        // Timestamp when current request started — for safety timeout
+const MINIMUM_GAP_MS = 2500;    // ~24 RPM max — conservative margin well under 30 RPM
 const MAX_RETRIES = 3;
+const MAX_QUEUE_SIZE = 20;      // Reject oldest if queue grows too large
+const SAFETY_TIMEOUT_MS = 30000; // Reset isProcessing if a request takes > 30s
 
 /**
  * Queue an API request and return a promise that resolves with the result.
@@ -35,6 +48,13 @@ const MAX_RETRIES = 3;
  */
 function enqueueRequest(fn) {
   return new Promise((resolve, reject) => {
+    // Prevent unbounded queue growth — reject oldest item if queue is too large
+    if (requestQueue.length >= MAX_QUEUE_SIZE) {
+      const oldest = requestQueue.shift();
+      if (oldest && oldest.reject) {
+        oldest.reject(new Error('Queue full — request dropped. Try again.'));
+      }
+    }
     requestQueue.push({ fn, resolve, reject });
     processQueue();
   });
@@ -44,12 +64,20 @@ function enqueueRequest(fn) {
  * Process the queue: send one request, wait MINIMUM_GAP_MS, then send the next.
  */
 function processQueue() {
+  // Safety: if processing has been going for too long, reset the flag
+  if (isProcessing && processingSince > 0 && (Date.now() - processingSince) > SAFETY_TIMEOUT_MS) {
+    logger.warn('Groq queue: Safety timeout triggered — resetting isProcessing');
+    isProcessing = false;
+  }
+
   if (isProcessing || requestQueue.length === 0) return;
   isProcessing = true;
+  processingSince = Date.now();
 
   const processNext = async () => {
     if (requestQueue.length === 0) {
       isProcessing = false;
+      processingSince = 0;
       return;
     }
 
@@ -60,7 +88,14 @@ function processQueue() {
       await new Promise(r => setTimeout(r, MINIMUM_GAP_MS - elapsed));
     }
 
-    const { fn, resolve, reject } = requestQueue.shift();
+    const item = requestQueue.shift();
+    if (!item || typeof item.fn !== 'function') {
+      // Invalid queue item — skip and continue
+      setTimeout(() => processNext(), 100);
+      return;
+    }
+
+    const { fn, resolve, reject } = item;
 
     // Execute with retry logic for 429 errors
     const executeWithRetry = async (attempt = 0) => {
@@ -69,9 +104,18 @@ function processQueue() {
         const result = await fn();
         resolve(result);
       } catch (err) {
-        if (err.status === 429 && attempt < MAX_RETRIES) {
+        // Handle non-object errors safely (e.g., string errors, null, undefined)
+        const errStatus = (err && typeof err === 'object' && err.status) || 0;
+        const errMsg = (err && typeof err === 'object' && err.message) || String(err || 'Unknown error');
+
+        // Retry on transient errors: 429 (rate limit), 408 (timeout),
+        // 409 (conflict), >=500 (server error), or connection errors (status 0)
+        const isTransientError = errStatus === 429 || errStatus === 408 || errStatus === 409 || errStatus >= 500 || errStatus === 0;
+
+        if (isTransientError && attempt < MAX_RETRIES) {
           const backoffMs = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
-          logger.warn(`Groq rate limited (429). Retry ${attempt + 1}/${MAX_RETRIES} in ${backoffMs}ms`);
+          const statusLabel = errStatus || 'connection';
+          logger.warn(`Groq transient error (${statusLabel}). Retry ${attempt + 1}/${MAX_RETRIES} in ${backoffMs}ms`);
           await new Promise(r => setTimeout(r, backoffMs));
           return executeWithRetry(attempt + 1);
         }
@@ -142,7 +186,9 @@ async function sendMessage(messages, contextData = {}) {
   }
 
   try {
-    const model = process.env.MODEL || 'llama-3.3-70b-versatile';
+    // Use llama-3.1-8b-instant by default — it has 14,400 RPD (vs 1,000 RPD for 70B)
+    // and same 30 RPM. Much lower chance of hitting daily rate limits.
+    const model = process.env.MODEL || 'llama-3.1-8b-instant';
 
     const formattedMessages = [
       { role: 'system', content: SYSTEM_PROMPT },
@@ -201,9 +247,15 @@ async function sendMessage(messages, contextData = {}) {
       ...analysis,
     };
   } catch (error) {
-    logger.error('Groq API error:', error.message);
+    // Log the FULL error for debugging — especially important to distinguish
+    // between per-minute (30 RPM) and per-day (1,000 RPD) rate limits
+    const errStatus = (error && typeof error === 'object' && error.status) || 0;
+    const errMsg = (error && typeof error === 'object' && error.message) || String(error || 'Unknown error');
+    const errType = (error && typeof error === 'object' && error.type) || '';
+    const errCode = (error && typeof error === 'object' && error.code) || '';
+    logger.error(`Groq API error [status=${errStatus}, type=${errType}, code=${errCode}]: ${errMsg}`);
 
-    if (error.status === 401) {
+    if (errStatus === 401) {
       return {
         type: 'error',
         content: 'Invalid Groq API key. Please check your API key in Settings.',
@@ -212,18 +264,28 @@ async function sendMessage(messages, contextData = {}) {
       };
     }
 
-    if (error.status === 429) {
+    if (errStatus === 429) {
+      // Check if this is a per-day or per-minute limit by examining the error message
+      const isDailyLimit = /day|daily/i.test(errMsg);
+      // Show the correct daily limit based on current model
+      const model = process.env.MODEL || 'llama-3.1-8b-instant';
+      const is8B = model.includes('8b') || model.includes('8B') || model.includes('9b') || model.includes('9B') || model.includes('7b') || model.includes('7B');
+      const dailyLimit = is8B ? '14,400' : '1,000';
       return {
         type: 'error',
-        content: 'Rate limit exceeded. Please wait a moment and try again.',
+        content: isDailyLimit
+          ? `Groq daily request limit (${dailyLimit}/day for ${model}) reached. The limit resets ~24h after first daily request. Check console.groq.com or upgrade your plan.`
+          : 'Rate limit exceeded (30 req/min). Please wait a moment and try again.',
         severity: 'warning',
-        suggestions: ['Wait a few seconds', 'Check your Groq plan limits'],
+        suggestions: isDailyLimit
+          ? [`Switch to a model with higher daily limit (e.g. llama-3.1-8b-instant with 14,400/day)`, 'Wait for daily reset', 'Upgrade your Groq plan for higher limits', 'Check usage at console.groq.com']
+          : ['Wait a few seconds', 'Check your Groq plan limits'],
       };
     }
 
     return {
       type: 'error',
-      content: `Failed to reach Groq AI: ${error.message}`,
+      content: `Failed to reach Groq AI: ${errMsg}`,
       severity: 'error',
       suggestions: ['Check your internet connection', 'Verify Groq service status'],
     };
