@@ -206,9 +206,15 @@ if __name__ == "__main__":
    */
   openInVSCode(targetPath = null) {
     return new Promise((resolve) => {
-      const resolvedTarget = targetPath
-        ? this.resolvePath(targetPath)
-        : this.projectPath;
+      let resolvedTarget;
+      try {
+        resolvedTarget = targetPath
+          ? this.resolvePath(targetPath)
+          : this.projectPath;
+      } catch (err) {
+        resolve({ success: false, error: err.message });
+        return;
+      }
 
       if (!resolvedTarget || !fs.existsSync(resolvedTarget)) {
         resolve({ success: false, error: `Path not found: ${resolvedTarget || 'No project selected'}` });
@@ -377,7 +383,9 @@ if __name__ == "__main__":
   }
 
   /**
-   * Resolve a relative path against the project path
+   * Resolve a path against the project path.
+   * Enforces project boundary — absolute paths outside the project
+   * are rejected, and relative path traversal (../) is blocked.
    */
   resolvePath(filePath, createDir = false) {
     if (!this.projectPath) {
@@ -385,12 +393,37 @@ if __name__ == "__main__":
       return path.resolve(filePath);
     }
 
-    // Check if it's already an absolute path
+    let resolvedPath;
+
     if (path.isAbsolute(filePath)) {
-      return filePath;
+      // Absolute path — only allow if it's within the project directory
+      resolvedPath = path.resolve(filePath);
+    } else {
+      // Relative path — join with project path
+      resolvedPath = path.resolve(this.projectPath, filePath);
     }
 
-    return path.join(this.projectPath, filePath);
+    // Enforce project boundary: resolved path MUST be inside projectPath
+    const normalizedProject = path.resolve(this.projectPath);
+    const normalizedResolved = path.resolve(resolvedPath);
+
+    // On Windows, paths are case-insensitive — normalize for comparison
+    let projectCheck = normalizedProject;
+    let resolvedCheck = normalizedResolved;
+    if (process.platform === 'win32') {
+      projectCheck = normalizedProject.toLowerCase();
+      resolvedCheck = normalizedResolved.toLowerCase();
+    }
+
+    if (!resolvedCheck.startsWith(projectCheck + path.sep) &&
+        resolvedCheck !== projectCheck) {
+      // Path traversal detected — block it
+      const errMsg = `Access denied: path "${filePath}" is outside the project directory`;
+      logger.error(`CodeService: ${errMsg}`);
+      throw new Error(errMsg);
+    }
+
+    return normalizedResolved;
   }
 }
 
