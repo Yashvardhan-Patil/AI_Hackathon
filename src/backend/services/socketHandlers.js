@@ -29,9 +29,15 @@ function setupSocketHandlers(io) {
       watchedPaths: fileMonitor.getWatchedPaths(),
     });
 
-    // Send current alert state
+    // Send current state for all tabs — this ensures every tab gets
+    // initial data immediately on connection, without needing to request it.
     socket.emit('alerts:state', alertManager.getActiveAlerts());
     socket.emit('alerts:history', alertManager.getAlertHistory({ limit: 50 }));
+    socket.emit('health:status', {
+      timestamp: new Date().toISOString(),
+      ...endpointMonitor.getStatus(),
+      monitoredEndpoints: endpointMonitor.getStatus().endpoints,
+    });
 
     // ==================== CHAT — NATURAL LANGUAGE FILE ACCESS ====================
     // ALL messages go through this handler. No commands, no special syntax.
@@ -673,7 +679,7 @@ function setupSocketHandlers(io) {
     socket.on('settings:get-status', () => {
       socket.emit('settings:status', {
         hasApiKey: !!process.env.GROQ_API_KEY,
-        model: process.env.MODEL || 'llama-3.3-70b-versatile',
+        model: process.env.MODEL || 'llama-3.1-8b-instant',
         projectPath: codeService.getProjectPath(),
       });
     });

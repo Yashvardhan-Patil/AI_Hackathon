@@ -15,7 +15,7 @@ import {
 function Settings({ socket, projectPath, onSelectProject, isAlwaysOnTop, onToggleAlwaysOnTop, addToast }) {
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
-  const [model, setModel] = useState('llama-3.3-70b-versatile');
+  const [model, setModel] = useState('llama-3.1-8b-instant');
   const [autoFix, setAutoFix] = useState(false);
   const [notifications, setNotifications] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -28,7 +28,15 @@ function Settings({ socket, projectPath, onSelectProject, isAlwaysOnTop, onToggl
     const savedNotifications = localStorage.getItem('notifications');
 
     if (savedKey) setApiKey(savedKey);
-    if (savedModel) setModel(savedModel);
+    if (savedModel) {
+      // Migrate existing users from old high-limit models to the new default
+      // Llama 3.1 8B Instant has 14,400 RPD vs 1,000 RPD for 70B models.
+      const isOldHighLimitModel = /70b|70B|versatile/i.test(savedModel);
+      setModel(isOldHighLimitModel ? 'llama-3.1-8b-instant' : savedModel);
+      if (isOldHighLimitModel) {
+        localStorage.setItem('groq_model', 'llama-3.1-8b-instant');
+      }
+    }
     if (savedAutoFix) setAutoFix(savedAutoFix === 'true');
     if (savedNotifications) setNotifications(savedNotifications === 'true');
   }, []);
@@ -123,8 +131,9 @@ function Settings({ socket, projectPath, onSelectProject, isAlwaysOnTop, onToggl
               onChange={(e) => setModel(e.target.value)}
               className="input-field text-xs appearance-none cursor-pointer"
             >
-              <option value="llama-3.3-70b-versatile">Llama 3.3 70B (Fast)</option>
-              <option value="llama-3.1-70b-versatile">Llama 3.1 70B (Balanced)</option>
+              <option value="llama-3.1-8b-instant">Llama 3.1 8B Instant ⚡ (14,400 req/day)</option>
+              <option value="llama-3.3-70b-versatile">Llama 3.3 70B (1,000 req/day)</option>
+              <option value="llama-3.1-70b-versatile">Llama 3.1 70B (1,000 req/day)</option>
               <option value="mixtral-8x7b-32768">Mixtral 8x7B (Large Context)</option>
               <option value="gemma2-9b-it">Gemma 2 9B (Lightweight)</option>
             </select>
