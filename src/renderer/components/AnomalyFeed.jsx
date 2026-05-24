@@ -71,63 +71,24 @@ const TYPE_ICONS = {
   endpoint_degraded: Activity,
 };
 
-function AnomalyFeed({ socket, connected, addToast, isActive }) {
+function AnomalyFeed({ socket, connected, addToast, isActive, alerts: propAlerts, summary: propSummary, aiAnalyses: propAiAnalyses }) {
   const [alerts, setAlerts] = useState([]);
   const [summary, setSummary] = useState({ total: 0, critical: 0, high: 0, medium: 0, low: 0 });
   const [expandedAlerts, setExpandedAlerts] = useState({});
   const [filter, setFilter] = useState('all');
   const [aiAnalyses, setAiAnalyses] = useState({});
 
-  // Socket listeners — registered on mount, cleaned up on unmount
-  // This prevents duplicate listeners from accumulating when switching tabs
+  // Sync centralized data from App.jsx into local state
+  // Using props ensures we always have the latest data even when this
+  // component isn't mounted (data was collected in the background).
   useEffect(() => {
-    if (!socket) return;
+    setAlerts(propAlerts);
+    setSummary(propSummary);
+  }, [propAlerts, propSummary]);
 
-    const handleState = (data) => {
-      setAlerts(data.alerts || []);
-      setSummary({
-        total: data.total || 0,
-        critical: data.critical || 0,
-        high: data.high || 0,
-        medium: data.medium || 0,
-        low: data.low || 0,
-      });
-    };
-
-    const handleNew = (data) => {
-      addToast(
-        data.alert ? data.alert.message || data.summary || 'Anomaly detected' :
-        `${data.count} anomaly(ies) detected${data.criticalCount > 0 ? ` (${data.criticalCount} critical)` : ''}`,
-        data.alert?.severity || (data.criticalCount > 0 ? 'error' : 'warning')
-      );
-      // Fetch current state when a new anomaly arrives
-      if (data.alert) {
-        socket.emit('alerts:get-active');
-      }
-    };
-
-    const handleAiAnalysis = (data) => {
-      if (data.alertId && data.analysis) {
-        setAiAnalyses(prev => ({
-          ...prev,
-          [data.alertId]: data.analysis,
-        }));
-      }
-    };
-
-    socket.on('alerts:state', handleState);
-    socket.on('anomaly:new', handleNew);
-    socket.on('anomaly:ai-analysis', handleAiAnalysis);
-
-    // Initial fetch
-    socket.emit('alerts:get-active');
-
-    return () => {
-      socket.off('alerts:state', handleState);
-      socket.off('anomaly:new', handleNew);
-      socket.off('anomaly:ai-analysis', handleAiAnalysis);
-    };
-  }, [socket, addToast]);
+  useEffect(() => {
+    setAiAnalyses(propAiAnalyses);
+  }, [propAiAnalyses]);
 
   // Re-fetch data whenever this tab becomes active (catches up on missed updates)
   useEffect(() => {

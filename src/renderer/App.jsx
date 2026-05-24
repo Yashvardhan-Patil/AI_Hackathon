@@ -76,6 +76,24 @@ function App() {
   // Chat messages lifted here so they persist across tab switches
   const [chatMessages, setChatMessages] = useState([WELCOME_MESSAGE]);
 
+  // ========================
+  // CENTRALIZED TAB DATA
+  // All socket listeners live in App.jsx so data flows in the background
+  // regardless of which tab is active. Each tab just displays the latest data.
+  // ========================
+  // AnomalyFeed data
+  const [activeAlerts, setActiveAlerts] = useState([]);
+  const [alertsSummary, setAlertsSummary] = useState({ total: 0, critical: 0, high: 0, medium: 0, low: 0 });
+  const [aiAnalyses, setAiAnalyses] = useState({});
+  // ApiHealth data
+  const [healthEndpoints, setHealthEndpoints] = useState([]);
+  const [lastHealthUpdate, setLastHealthUpdate] = useState(null);
+  const [healthUptime, setHealthUptime] = useState(100);
+  // LogsPanel data
+  const [logEntries, setLogEntries] = useState([]);
+  // AlertHistory data
+  const [alertHistory, setAlertHistory] = useState([]);
+
   // Connect to backend
   useEffect(() => {
     const newSocket = io(SOCKET_URL, {
@@ -146,6 +164,36 @@ function App() {
       addToast(`${data.count} error(s) detected in ${data.fileName}`, 'error');
     });
 
+    // ========================
+    // CENTRALIZED TAB LISTENERS
+    // These run regardless of which tab is active, collecting data in the
+    // background so every tab has the latest data instantly when you switch.
+    // ========================
+
+    // AnomalyFeed: alert state updates
+    newSocket.on('alerts:state', (data) => {
+      const alerts = data.alerts || data || [];
+      setActiveAlerts(Array.isArray(alerts) ? alerts : []);
+      setAlertsSummary({
+        total: data.total || (Array.isArray(alerts) ? alerts.length : 0),
+        critical: data.critical || 0,
+        high: data.high || 0,
+        medium: data.medium || 0,
+        low: data.low || 0,
+      });
+    });
+
+    // AnomalyFeed: AI analysis per alert
+    newSocket.on('anomaly:ai-analysis', (data) => {
+      if (data.alertId && data.analysis) {
+        setAiAnalyses(prev => ({
+          ...prev,
+          [data.alertId]: data.analysis,
+        }));
+      }
+    });
+
+    // Anomaly toasts (already existed, just keeping)
     newSocket.on('anomaly:new', (data) => {
       // Show toast for anomalies regardless of which tab is active
       if (data.alert) {
@@ -156,6 +204,56 @@ function App() {
       } else if (data.count && data.summary) {
         addToast(data.summary, data.criticalCount > 0 ? 'error' : 'warning');
       }
+    });
+
+    // ApiHealth: endpoint status updates
+    newSocket.on('health:status', (data) => {
+      setHealthEndpoints(data.monitoredEndpoints || []);
+      setLastHealthUpdate(data.timestamp);
+      setHealthUptime(data.uptime || 100);
+    });
+
+    // LogsPanel: real-time log entries pushed from backend
+    newSocket.on('logs:updated', (data) => {
+      setLogEntries((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          timestamp: data.timestamp,
+          file: data.fileName,
+          type: 'info',
+          message: `Log file updated: ${data.fileName}`,
+          stats: data.stats,
+        },
+      ]);
+    });
+
+    newSocket.on('logs:errors-detected', (data) => {
+      const newErrors = (data.errors || []).map((err) => ({
+        id: `${Date.now()}-${Math.random()}`,
+        timestamp: data.timestamp,
+        file: data.fileName,
+        type: 'error',
+        message: err.content,
+        statusCode: err.statusCode,
+        lineNumber: err.lineNumber,
+      }));
+
+      setLogEntries((prev) => [...newErrors, ...prev]);
+
+      addToast(`${data.count} error(s) in ${data.fileName}`, 'error');
+    });
+
+    // AlertHistory: history updates
+    newSocket.on('alerts:history', (data) => {
+      setAlertHistory(data.alerts || []);
+    });
+
+    newSocket.on('alerts:resolved', () => {
+      // Trigger a re-fetch on the next tick
+      setTimeout(() => {
+        newSocket.emit('alerts:get-history', { limit: 100 });
+      }, 100);
     });
 
     newSocket.on('monitor:error', (data) => {
@@ -324,6 +422,9 @@ function App() {
             connected={connected}
             addToast={addToast}
             isActive={activeTab === 'anomalies'}
+            alerts={activeAlerts}
+            summary={alertsSummary}
+            aiAnalyses={aiAnalyses}
           />
         );
       case 'logs':
@@ -334,6 +435,7 @@ function App() {
             projectPath={projectPath}
             addToast={addToast}
             isActive={activeTab === 'logs'}
+            logEntries={logEntries}
           />
         );
       case 'health':
@@ -343,6 +445,9 @@ function App() {
             connected={connected}
             addToast={addToast}
             isActive={activeTab === 'health'}
+            endpoints={healthEndpoints}
+            lastUpdated={lastHealthUpdate}
+            uptime={healthUptime}
           />
         );
       case 'history':
@@ -351,6 +456,7 @@ function App() {
             socket={socket}
             connected={connected}
             isActive={activeTab === 'history'}
+            history={alertHistory}
           />
         );
       case 'settings':

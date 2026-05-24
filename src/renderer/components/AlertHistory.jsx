@@ -22,7 +22,7 @@ const SEVERITY_CONFIG = {
   low: { icon: Shield, color: 'text-gray-400', bg: 'bg-gray-500/5', label: 'Low' },
 };
 
-function AlertHistory({ socket, connected, isActive }) {
+function AlertHistory({ socket, connected, isActive, history: propHistory }) {
   const [history, setHistory] = useState([]);
   const [filter, setFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -35,30 +35,13 @@ function AlertHistory({ socket, connected, isActive }) {
     socket.emit('alerts:get-history', { limit: 100 });
   };
 
-  // Socket listeners — registered on mount, cleaned up on unmount
+  // Sync centralized history from App.jsx into local state
+  // App.jsx collects alerts:history and alerts:resolved in the background
+  // so we have the latest data even when this tab isn't active.
   useEffect(() => {
-    if (!socket) return;
-
-    fetchHistory();
-
-    const handleHistory = (data) => {
-      setHistory(data.alerts || []);
-      setIsLoading(false);
-    };
-
-    // Refresh when alerts are resolved
-    const handleResolved = () => {
-      fetchHistory();
-    };
-
-    socket.on('alerts:history', handleHistory);
-    socket.on('alerts:resolved', handleResolved);
-
-    return () => {
-      socket.off('alerts:history', handleHistory);
-      socket.off('alerts:resolved', handleResolved);
-    };
-  }, [socket]);
+    setHistory(propHistory);
+    setIsLoading(false);
+  }, [propHistory]);
 
   // Re-fetch history whenever this tab becomes active
   useEffect(() => {

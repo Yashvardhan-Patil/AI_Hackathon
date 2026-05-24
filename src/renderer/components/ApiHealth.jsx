@@ -40,7 +40,7 @@ const DEFAULT_ENDPOINTS = [
   { url: 'http://localhost:3001/api/status', method: 'GET', name: 'API Status', path: '/api/status' },
 ];
 
-function ApiHealth({ socket, connected, addToast, isActive }) {
+function ApiHealth({ socket, connected, addToast, isActive, endpoints: propEndpoints, lastUpdated: propLastUpdated, uptime: propUptime }) {
   const [endpoints, setEndpoints] = useState([]);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -54,26 +54,13 @@ function ApiHealth({ socket, connected, addToast, isActive }) {
     socket.emit('health:check');
   }, [socket]);
 
-  // Socket listeners — registered on mount, cleaned up on unmount
+  // Sync centralized data from App.jsx into local state
   useEffect(() => {
-    if (!socket) return;
-
-    const handleHealthStatus = (data) => {
-      setEndpoints(data.monitoredEndpoints || []);
-      setLastUpdated(data.timestamp);
-      setUptime(data.uptime || 100);
-      setIsRefreshing(false);
-    };
-
-    socket.on('health:status', handleHealthStatus);
-
-    // Initial fetch
-    fetchHealth();
-
-    return () => {
-      socket.off('health:status', handleHealthStatus);
-    };
-  }, [socket, fetchHealth]);
+    setEndpoints(propEndpoints);
+    setLastUpdated(propLastUpdated);
+    setUptime(propUptime);
+    setIsRefreshing(false);
+  }, [propEndpoints, propLastUpdated, propUptime]);
 
   // Re-fetch whenever this tab becomes active (catches up on missed updates)
   useEffect(() => {
@@ -81,13 +68,7 @@ function ApiHealth({ socket, connected, addToast, isActive }) {
     fetchHealth();
   }, [socket, isActive, fetchHealth]);
 
-  // Auto-refresh every 30 seconds
-  useEffect(() => {
-    const interval = setInterval(fetchHealth, 30000);
-    return () => clearInterval(interval);
-  }, [fetchHealth]);
-
-  // Auto-refresh every 30 seconds
+  // Auto-refresh every 30 seconds (only ONE interval, not duplicated)
   useEffect(() => {
     const interval = setInterval(fetchHealth, 30000);
     return () => clearInterval(interval);

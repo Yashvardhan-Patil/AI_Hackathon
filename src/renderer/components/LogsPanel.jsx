@@ -13,8 +13,8 @@ import {
   Download,
 } from 'lucide-react';
 
-function LogsPanel({ socket, connected, projectPath, addToast, isActive }) {
-  const [logs, setLogs] = useState([]);
+function LogsPanel({ socket, connected, projectPath, addToast, isActive, logEntries = [] }) {
+  const [logs, setLogs] = useState(() => logEntries);
   const [filter, setFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [logFiles, setLogFiles] = useState([]);
@@ -31,7 +31,8 @@ function LogsPanel({ socket, connected, projectPath, addToast, isActive }) {
     }
   }, [logs, autoScroll]);
 
-  // Socket listeners for real-time logs — registered on mount, cleaned up on unmount
+  // Real-time log event listeners (only active while this component is mounted)
+  // These append/prepend to the current log view without overwriting it.
   useEffect(() => {
     if (!socket) return;
 
@@ -50,7 +51,7 @@ function LogsPanel({ socket, connected, projectPath, addToast, isActive }) {
     };
 
     const handleErrorsDetected = (data) => {
-      const newErrors = data.errors.map((err) => ({
+      const newErrors = (data.errors || []).map((err) => ({
         id: `${Date.now()}-${Math.random()}`,
         timestamp: data.timestamp,
         file: data.fileName,
@@ -61,8 +62,6 @@ function LogsPanel({ socket, connected, projectPath, addToast, isActive }) {
       }));
 
       setLogs((prev) => [...newErrors, ...prev]);
-
-      addToast(`${data.count} error(s) in ${data.fileName}`, 'error');
     };
 
     socket.on('logs:updated', handleLogsUpdated);
