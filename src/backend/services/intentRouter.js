@@ -1,3 +1,4 @@
+const path = require('path');
 const logger = require('../utils/logger');
 const codeService = require('./codeService');
 const webService = require('./webService');
@@ -349,33 +350,80 @@ class IntentRouter {
   }
 
   /**
+   * Find a file in the project by name, case-insensitively.
+   * This ensures "First.py" matches "first.py" on disk.
+   */
+  static findFileCaseInsensitive(candidatePath) {
+    if (!codeService.getProjectPath()) return candidatePath;
+
+    try {
+      // List all project files and try to find a case-insensitive match
+      const listResult = codeService.listFiles('', 4);
+      if (!listResult.success) return candidatePath;
+
+      // Normalize the candidate path for comparison
+      const normalizedCandidate = candidatePath.replace(/[/\\]+/g, '/').toLowerCase();
+
+      // Try to find an exact match first (fast path)
+      const exactMatch = listResult.files.find(f =>
+        f.relativePath.replace(/[/\\]+/g, '/').toLowerCase() === normalizedCandidate
+      );
+      if (exactMatch) return exactMatch.relativePath;
+
+      // Try partial match — find by filename (last component)
+      const candidateName = candidatePath.split(/[/\\]/).pop().toLowerCase();
+      const nameMatch = listResult.files.find(f =>
+        f.type === 'file' &&
+        f.name.toLowerCase() === candidateName
+      );
+      if (nameMatch) return nameMatch.relativePath;
+
+      // Try to match by extension + any segment
+      const ext = path.extname(candidatePath).toLowerCase();
+      if (ext) {
+        const extMatch = listResult.files.find(f =>
+          f.type === 'file' &&
+          f.relativePath.replace(/[/\\]+/g, '/').toLowerCase().endsWith(normalizedCandidate)
+        );
+        if (extMatch) return extMatch.relativePath;
+      }
+    } catch (err) {
+      logger.warn(`findFileCaseInsensitive error: ${err.message}`);
+    }
+
+    // Return the original candidate if no match found
+    return candidatePath;
+  }
+
+  /**
    * Extract file path from natural language.
    * Looks for words with file extensions or path separators.
+   * Then attempts case-insensitive matching against actual project files.
    */
   static extractFilePath(text) {
     // Try to find paths in quotes first
     const quoteMatch = text.match(/["'`]([^"'`]+\.[a-zA-Z0-9]+)["'`]/);
-    if (quoteMatch) return quoteMatch[1];
+    if (quoteMatch) return this.findFileCaseInsensitive(quoteMatch[1]);
 
     // Try to find paths after "file" keyword
     const fileKeywordMatch = text.match(/(?:file|script)\s+(?:called|named|at|located\s+at|in|from)?\s*["'`]?([^\s"'`,!?;:]+(?:\.[a-zA-Z0-9]+))["'`]?/i);
-    if (fileKeywordMatch) return fileKeywordMatch[1];
+    if (fileKeywordMatch) return this.findFileCaseInsensitive(fileKeywordMatch[1]);
 
     // Try to find paths after action words
     const actionMatch = text.match(/(?:read|open|show|fix|check|view|run|execute|create|make|write|update|edit|delete|remove)\s+(?:me\s+)?(?:the\s+)?(?:file\s+)?(?:called\s+|named\s+)?["'`]?([^\s"'`,!?;:]+(?:\.[a-zA-Z0-9]+))["'`]?/i);
-    if (actionMatch) return actionMatch[1];
+    if (actionMatch) return this.findFileCaseInsensitive(actionMatch[1]);
 
     // Generic: find any word with a file extension
     const extMatch = text.match(/([^\s"'`,!?;:()]+\.(?:js|jsx|ts|tsx|py|rb|go|java|rs|cpp|c|cs|php|swift|kt|json|yaml|yml|toml|xml|html|css|scss|sql|md|txt|log|sh|bash|ps1|bat|exe|dll|so|env|gitignore|dockerfile|vue|svelte|astro|mjs|cjs|tf|dart|zig|nim|clj|cljs|edn|groovy|fs|fsx|ml|lhs|coffee|litcoffee|tsx|jsx|mts|cts))/i);
-    if (extMatch) return extMatch[1];
+    if (extMatch) return this.findFileCaseInsensitive(extMatch[1]);
 
     // Try paths with slashes
     const slashMatch = text.match(/([^\s"'`,!?;:()]+\/[^\s"'`,!?;:()]+\.[a-zA-Z0-9]+)/);
-    if (slashMatch) return slashMatch[1];
+    if (slashMatch) return this.findFileCaseInsensitive(slashMatch[1]);
 
     // Try Windows paths with backslashes
     const backslashMatch = text.match(/([^\s"'`,!?;:()]+\\[^\s"'`,!?;:()]+\.[a-zA-Z0-9]+)/);
-    if (backslashMatch) return backslashMatch[1];
+    if (backslashMatch) return this.findFileCaseInsensitive(backslashMatch[1]);
 
     return null;
   }

@@ -386,6 +386,15 @@ function setupSocketHandlers(io) {
           logger.error('Auto-scan anomaly error:', scanErr.message);
         }
 
+        // ===== BUILD PROJECT FILE STRUCTURE for chat context =====
+        let fileStructure = { files: [], error: null };
+        try {
+          fileStructure = codeService.listFiles('', 3);
+        } catch (structErr) {
+          logger.error('Build file structure error:', structErr.message);
+          fileStructure.error = structErr.message;
+        }
+
         // ===== BROADCAST UPDATED STATE TO ALL CLIENTS =====
         if (anomalyScanResult && anomalyScanResult.totalAnomalies > 0) {
           io.emit('anomaly:new', {
@@ -408,6 +417,22 @@ function setupSocketHandlers(io) {
           starterFileMessage: createResult.success ? 'Created example/first.py with To-Do List app' : null,
           endpointsDiscovered: discoveredEndpoints.length,
           anomaliesFound: anomalyScanResult?.totalAnomalies || 0,
+          fileStructure: fileStructure.success ? {
+            count: fileStructure.count,
+            files: fileStructure.files.map(f => f.relativePath),
+            tree: fileStructure.files
+              .filter(f => f.type === 'file' && !f.name.startsWith('.'))
+              .slice(0, 80)
+              .map(f => f.relativePath),
+          } : null,
+          // Also store a formatted tree string directly
+          fileTreeSummary: fileStructure.success
+            ? fileStructure.files
+                .filter(f => f.type === 'file' && !f.name.startsWith('.'))
+                .slice(0, 60)
+                .map(f => `  - ${f.relativePath}`)
+                .join('\n')
+            : 'Could not scan project structure',
         });
       } catch (error) {
         logger.error('Project selection error:', error.message);

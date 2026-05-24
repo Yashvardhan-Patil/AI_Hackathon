@@ -105,6 +105,24 @@ function App() {
         setProjectPath(data.path);
         const folderName = data.path.split(/[/\\]/).pop();
 
+        // Build a chat message that shows the project structure
+        const fileTree = data.fileTreeSummary
+          ? `\n\n**Project structure:**\n\`\`\`\n${data.fileTreeSummary}\n\`\`\``
+          : '';
+
+        const folderMessage = {
+          id: `folder-selected-${Date.now()}`,
+          role: 'assistant',
+          content: `📁 **Project Selected: \`${folderName}\`**\n\nI'm now working inside this folder. You can ask me to read, fix, or create files — I know the full project structure.${fileTree}\n\n**Try saying:**\n> \"List all files\"\n> \"Fix first.py\"\n> \"Read server.js\"\n> \"Create a new API route\"`,
+          timestamp: new Date().toISOString(),
+          severity: 'info',
+          hasFix: false,
+          hasRootCause: false,
+        };
+
+        // Add the folder selection message to chat
+        setChatMessages((prev) => [...prev, folderMessage]);
+
         if (data.starterFileCreated) {
           addToast(`✅ Created ${data.starterFilePath} with To-Do List app`, 'success');
           // Auto-switch to assistant tab to show the result

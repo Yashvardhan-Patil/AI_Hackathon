@@ -82,10 +82,8 @@ function AnomalyFeed({ socket, connected, addToast, isActive }) {
   useEffect(() => {
     if (!socket) return;
 
-    if (isActive) {
-      socket.emit('alerts:get-active');
-    }
-    socket.on('alerts:state', (data) => {
+    // Always listen for real-time updates
+    const handleState = (data) => {
       setAlerts(data.alerts || []);
       setSummary({
         total: data.total || 0,
@@ -94,32 +92,41 @@ function AnomalyFeed({ socket, connected, addToast, isActive }) {
         medium: data.medium || 0,
         low: data.low || 0,
       });
-    });
+    };
 
-    socket.on('anomaly:new', (data) => {
+    const handleNew = (data) => {
       if (data.alert) {
         addToast(data.alert.message || data.summary || 'Anomaly detected', data.alert.severity || 'error');
       } else if (data.count > 0) {
         const label = data.criticalCount > 0 ? 'error' : 'warning';
         addToast(`${data.count} anomaly(ies) detected${data.criticalCount > 0 ? ` (${data.criticalCount} critical)` : ''}`, label);
       }
-    });
+    };
 
-    socket.on('anomaly:ai-analysis', (data) => {
+    const handleAiAnalysis = (data) => {
       if (data.alertId && data.analysis) {
         setAiAnalyses(prev => ({
           ...prev,
           [data.alertId]: data.analysis,
         }));
       }
-    });
+    };
+
+    socket.on('alerts:state', handleState);
+    socket.on('anomaly:new', handleNew);
+    socket.on('anomaly:ai-analysis', handleAiAnalysis);
+
+    // Re-fetch data whenever this tab becomes active
+    if (isActive) {
+      socket.emit('alerts:get-active');
+    }
 
     return () => {
-      socket.off('alerts:state');
-      socket.off('anomaly:new');
-      socket.off('anomaly:ai-analysis');
+      socket.off('alerts:state', handleState);
+      socket.off('anomaly:new', handleNew);
+      socket.off('anomaly:ai-analysis', handleAiAnalysis);
     };
-  }, [socket, addToast]);
+  }, [socket, addToast, isActive]); // isActive is now in deps — re-fetches on tab switch
 
   const handleResolve = useCallback((alertId) => {
     if (!socket) return;

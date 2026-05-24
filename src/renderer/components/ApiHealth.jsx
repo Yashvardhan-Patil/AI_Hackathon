@@ -66,7 +66,7 @@ function ApiHealth({ socket, connected, addToast, isActive }) {
 
     socket.on('health:status', handleHealthStatus);
 
-    // Fetch on mount and when tab becomes active
+    // Fetch on mount and whenever this tab becomes active
     if (isActive) {
       fetchHealth();
     }
@@ -74,7 +74,7 @@ function ApiHealth({ socket, connected, addToast, isActive }) {
     return () => {
       socket.off('health:status', handleHealthStatus);
     };
-  }, [socket, fetchHealth]);
+  }, [socket, fetchHealth, isActive]);
 
   // Auto-refresh every 30 seconds
   useEffect(() => {
