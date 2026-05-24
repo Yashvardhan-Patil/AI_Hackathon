@@ -14,6 +14,80 @@ function getClient() {
   return groqClient;
 }
 
+// ========================
+// GLOBAL RATE-LIMIT QUEUE
+// ========================
+// Enforces minimum 2s gap between API calls to stay well under Groq's
+// 30 RPM free-tier limit. Also auto-retries 429 (rate limit) errors
+// with exponential backoff instead of failing immediately.
+//
+// All calls to sendMessage() go through this queue transparently.
+// ========================
+const requestQueue = [];
+let isProcessing = false;
+let lastRequestTime = 0;
+const MINIMUM_GAP_MS = 2200; // ~27 RPM max, safe margin under 30 RPM limit
+const MAX_RETRIES = 3;
+
+/**
+ * Queue an API request and return a promise that resolves with the result.
+ * Requests are processed one at a time with MINIMUM_GAP_MS between them.
+ */
+function enqueueRequest(fn) {
+  return new Promise((resolve, reject) => {
+    requestQueue.push({ fn, resolve, reject });
+    processQueue();
+  });
+}
+
+/**
+ * Process the queue: send one request, wait MINIMUM_GAP_MS, then send the next.
+ */
+function processQueue() {
+  if (isProcessing || requestQueue.length === 0) return;
+  isProcessing = true;
+
+  const processNext = async () => {
+    if (requestQueue.length === 0) {
+      isProcessing = false;
+      return;
+    }
+
+    // Enforce minimum gap since last request
+    const now = Date.now();
+    const elapsed = now - lastRequestTime;
+    if (elapsed < MINIMUM_GAP_MS) {
+      await new Promise(r => setTimeout(r, MINIMUM_GAP_MS - elapsed));
+    }
+
+    const { fn, resolve, reject } = requestQueue.shift();
+
+    // Execute with retry logic for 429 errors
+    const executeWithRetry = async (attempt = 0) => {
+      try {
+        lastRequestTime = Date.now();
+        const result = await fn();
+        resolve(result);
+      } catch (err) {
+        if (err.status === 429 && attempt < MAX_RETRIES) {
+          const backoffMs = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
+          logger.warn(`Groq rate limited (429). Retry ${attempt + 1}/${MAX_RETRIES} in ${backoffMs}ms`);
+          await new Promise(r => setTimeout(r, backoffMs));
+          return executeWithRetry(attempt + 1);
+        }
+        reject(err);
+      }
+    };
+
+    await executeWithRetry();
+
+    // Schedule next item
+    setTimeout(() => processNext(), 100);
+  };
+
+  processNext();
+}
+
 const SYSTEM_PROMPT = `You are an expert AI coding and debugging copilot. You have **real, automatic file access** — when the user talks about a file, the system reads it for you and sends you the content.
 
 ## How File Access Works (Automatic)
@@ -106,14 +180,15 @@ async function sendMessage(messages, contextData = {}) {
       });
     }
 
-    const completion = await client.chat.completions.create({
+    // Send through the rate-limit queue to prevent burst overload
+    const completion = await enqueueRequest(() => client.chat.completions.create({
       messages: formattedMessages,
       model,
       temperature: 0.3,
       max_tokens: 2048,
       top_p: 0.95,
       stream: false,
-    });
+    }));
 
     const responseText = completion.choices[0]?.message?.content || '';
 

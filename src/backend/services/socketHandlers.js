@@ -7,7 +7,6 @@ const anomalyDetector = require('./anomalyDetector');
 const alertManager = require('./alertManager');
 const endpointMonitor = require('./endpointMonitor');
 const autoAnalyzer = require('./autoAnalyzer');
-const autoFixer = require('./autoFixer');
 const webService = require('./webService');
 const logger = require('../utils/logger');
 
@@ -576,34 +575,8 @@ function setupSocketHandlers(io) {
             if (alert) alerts.push(alert);
           }
 
-          // Auto-analyze with AI
+          // Auto-analyze with AI (goes through the rate-limit queue, so safe)
           const aiAnalysis = await autoAnalyzer.analyzeBatch(analysisResult.anomalies);
-
-          // Auto-fix critical and high severity anomalies
-          const fixableAnomalies = analysisResult.anomalies.filter(
-            a => (a.severity === 'critical' || a.severity === 'high') && !autoFixer.wasRecentlyFixed(a)
-          );
-          const fixResults = [];
-          const projectPath = codeService.getProjectPath();
-          if (projectPath && fixableAnomalies.length > 0) {
-            for (const anomaly of fixableAnomalies.slice(0, 3)) {  // Max 3 auto-fixes per batch
-              try {
-                // Include parsed log context if available
-                const logContext = data.parsedLog?.entries
-                  ?.filter(e => e.type === 'error')
-                  ?.slice(0, 5)
-                  ?.map(e => `[${e.timestamp || ''}] ${e.content}`)
-                  ?.join('\n') || '';
-                const fixResult = await autoFixer.autoFix(anomaly, projectPath, logContext);
-                if (fixResult.success) {
-                  fixResults.push(fixResult.result);
-                  logger.info(`SocketHandler: Auto-fix applied for ${anomaly.type} — ${fixResult.result.successCount} file(s)`);
-                }
-              } catch (fixErr) {
-                logger.error('SocketHandler: Auto-fix error:', fixErr.message);
-              }
-            }
-          }
 
           // Broadcast alert updates
           io.emit('alerts:state', alertManager.getActiveAlerts());
@@ -611,7 +584,6 @@ function setupSocketHandlers(io) {
           socket.emit('logs:anomaly-analysis', {
             ...analysisResult,
             aiAnalysis,
-            autoFixResults: fixResults.length > 0 ? fixResults : undefined,
             alertsProcessed: alerts.length,
           });
 
