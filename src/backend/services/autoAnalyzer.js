@@ -16,7 +16,7 @@ class AutoAnalyzer {
   constructor() {
     this.analysisCache = new Map();   // anomaly fingerprint -> { result, timestamp }
     this.config = {
-      minIntervalBetweenAnalysisMs: 30 * 1000,  // Don't re-analyze same type within 30s
+      minIntervalBetweenAnalysisMs: 2 * 60 * 1000,  // Don't re-analyze same type within 2 minutes
       maxConcurrentAnalysis: 3,                  // Max concurrent AI calls
     };
     this.activeAnalysis = 0;

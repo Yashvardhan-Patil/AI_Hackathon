@@ -15,7 +15,6 @@ const { setupSocketHandlers, MONITORED_ENDPOINTS } = require('./services/socketH
 const endpointMonitor = require('./services/endpointMonitor');
 const alertManager = require('./services/alertManager');
 const anomalyDetector = require('./services/anomalyDetector');
-const autoAnalyzer = require('./services/autoAnalyzer');
 const logger = require('./utils/logger');
 
 const app = express();
@@ -82,19 +81,11 @@ const onEndpointAlert = async (anomaly) => {
       });
 
       if (alert) {
-        // Auto-analyze with AI (also triggers auto-fixing internally via _triggerAutoFix)
-        autoAnalyzer.analyzeAnomaly(anomaly).then(analysis => {
-          // Broadcast AI-powered analysis
-          io.emit('anomaly:ai-analysis', {
-            alertId: alert.id,
-            analysis: analysis.result,
-            alert,
-          });
-        }).catch(err => {
-          logger.error('Auto-analyze failed:', err.message);
-        });
-
         // Broadcast alert to all connected clients
+        // NOTE: We intentionally do NOT call autoAnalyzer.analyzeAnomaly() here.
+        // Endpoint alerts (server down, timeout, etc.) are infrastructure issues —
+        // AI analysis + auto-fix can't fix them, and calling Groq here wastes
+        // rate limit budget that should be reserved for chat and log analysis.
         io.emit('anomaly:new', {
           alert,
           count: 1,
