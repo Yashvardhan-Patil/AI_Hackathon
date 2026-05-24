@@ -21,6 +21,51 @@ const TABS = [
   { id: 'settings', label: 'Settings', icon: 'Settings' },
 ];
 
+const WELCOME_MESSAGE = {
+  id: 'welcome',
+  role: 'assistant',
+  content: `# 👋 Welcome to API Debugging Copilot!
+
+I'm your AI coding assistant with **direct file access**. Just talk to me naturally — no special commands needed.
+
+## 💬 Things you can say
+
+**Read files & analyze:**
+> "Read the file app.js and check for errors"
+> "Show me what's in src/index.js"
+> "Look at my main.py file"
+
+**Fix bugs:**
+> "Fix the bug in server.js"
+> "There's an error in my code, help me fix it"
+> "Check app.js for issues"
+
+**Create new files:**
+> "Create a Python calculator called calc.py"
+> "Make a new file called config.json with my settings"
+
+**Run commands:**
+> "Run npm test"
+> "Execute python main.py"
+> "Run the project"
+
+**Open in VSCode:**
+> "Open server.js in VSCode"
+> "Open the project in VS Code"
+
+**Just ask questions:**
+> "Why is my API returning 500 errors?"
+> "What's causing this crash?"
+> "How do I optimize this query?"
+
+## ✨ No commands needed
+Every message goes through an **intent router** that automatically detects what you want to do — read, fix, create, run, or just chat. Speak naturally and things happen.`,
+  timestamp: new Date().toISOString(),
+  severity: 'info',
+  hasFix: false,
+  hasRootCause: false,
+};
+
 function App() {
   const [activeTab, setActiveTab] = useState('assistant');
   const [socket, setSocket] = useState(null);
@@ -28,6 +73,8 @@ function App() {
   const [projectPath, setProjectPath] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [isAlwaysOnTop, setIsAlwaysOnTop] = useState(false);
+  // Chat messages lifted here so they persist across tab switches
+  const [chatMessages, setChatMessages] = useState([WELCOME_MESSAGE]);
 
   // Connect to backend
   useEffect(() => {
@@ -236,6 +283,8 @@ function App() {
             connected={connected}
             projectPath={projectPath}
             addToast={addToast}
+            messages={chatMessages}
+            setMessages={setChatMessages}
           />
         );
       case 'anomalies':
@@ -244,6 +293,7 @@ function App() {
             socket={socket}
             connected={connected}
             addToast={addToast}
+            isActive={activeTab === 'anomalies'}
           />
         );
       case 'logs':
@@ -256,7 +306,14 @@ function App() {
           />
         );
       case 'health':
-        return <ApiHealth socket={socket} connected={connected} addToast={addToast} />;
+        return (
+          <ApiHealth
+            socket={socket}
+            connected={connected}
+            addToast={addToast}
+            isActive={activeTab === 'health'}
+          />
+        );
       case 'history':
         return <AlertHistory socket={socket} connected={connected} />;
       case 'settings':
@@ -297,7 +354,7 @@ function App() {
       {/* Main Content */}
       <main className="flex-1 overflow-hidden relative">
         <div className="h-full overflow-y-auto px-3 py-3">
-          <div key={activeTab} className="animate-fade-in h-full">
+          <div className="animate-fade-in h-full">
             {renderTabContent()}
           </div>
         </div>

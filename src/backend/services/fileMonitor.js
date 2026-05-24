@@ -2,6 +2,8 @@ const chokidar = require('chokidar');
 const path = require('path');
 const logger = require('../utils/logger');
 const { parseLogFile, extractErrors } = require('./logParser');
+const anomalyDetector = require('./anomalyDetector');
+const alertManager = require('./alertManager');
 
 class FileMonitor {
   constructor(io) {
@@ -106,7 +108,54 @@ class FileMonitor {
             count: newErrors.length,
             timestamp: new Date().toISOString(),
           });
+
+          // Feed errors into the anomaly detection pipeline (Fix #2)
+          this._feedErrorsToAnomalyDetector(newErrors, filePath);
         }
+      }
+    }
+  }
+
+  /**
+   * Feed detected errors into the anomaly detection pipeline
+   * so they show up in the Anomalies tab in real-time.
+   */
+  _feedErrorsToAnomalyDetector(errors, filePath) {
+    for (const err of errors) {
+      const anomalies = anomalyDetector.analyzeLogEntry({
+        type: 'error',
+        content: err.content,
+        timestamp: err.timestamp || new Date().toISOString(),
+        statusCode: err.statusCode,
+        source: 'file_monitor',
+        filePath,
+      });
+
+      const newAlerts = [];
+      for (const anomaly of anomalies) {
+        const alert = alertManager.processAnomaly({
+          ...anomaly,
+          source: 'file_monitor',
+          message: anomaly.message || err.content,
+          filePath,
+        });
+
+        if (alert && this.io) {
+          newAlerts.push(alert);
+          // Broadcast each anomaly to all connected clients
+          this.io.emit('anomaly:new', {
+            alert,
+            count: 1,
+            summary: anomaly.message || err.content,
+            criticalCount: anomaly.severity === 'critical' ? 1 : 0,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      }
+
+      // Emit updated state once after all alerts are processed
+      if (newAlerts.length > 0 && this.io) {
+        this.io.emit('alerts:state', alertManager.getActiveAlerts());
       }
     }
   }

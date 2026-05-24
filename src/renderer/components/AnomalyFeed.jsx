@@ -71,18 +71,20 @@ const TYPE_ICONS = {
   endpoint_degraded: Activity,
 };
 
-function AnomalyFeed({ socket, connected, addToast }) {
+function AnomalyFeed({ socket, connected, addToast, isActive }) {
   const [alerts, setAlerts] = useState([]);
   const [summary, setSummary] = useState({ total: 0, critical: 0, high: 0, medium: 0, low: 0 });
   const [expandedAlerts, setExpandedAlerts] = useState({});
   const [filter, setFilter] = useState('all');
   const [aiAnalyses, setAiAnalyses] = useState({});
 
-  // Load initial state
+  // Load initial state and refresh when tab becomes active
   useEffect(() => {
     if (!socket) return;
 
-    socket.emit('alerts:get-active');
+    if (isActive) {
+      socket.emit('alerts:get-active');
+    }
     socket.on('alerts:state', (data) => {
       setAlerts(data.alerts || []);
       setSummary({

@@ -8,6 +8,7 @@ const alertManager = require('./alertManager');
 const endpointMonitor = require('./endpointMonitor');
 const autoAnalyzer = require('./autoAnalyzer');
 const autoFixer = require('./autoFixer');
+const webService = require('./webService');
 const logger = require('../utils/logger');
 
 let fileMonitor = null;
@@ -301,7 +302,7 @@ function setupSocketHandlers(io) {
     // ==================== PROJECT EVENTS ====================
 
     // Project folder selection
-    socket.on('project:select', (data) => {
+    socket.on('project:select', async (data) => {
       try {
         codeService.setProjectPath(data.path);
         const result = fileMonitor.startWatching(data.path);
@@ -314,12 +315,99 @@ function setupSocketHandlers(io) {
           logger.error('Failed to create starter file:', starterError.message);
         }
 
+        // ===== AUTO-DISCOVER PROJECT ENDPOINTS (Fix #3) =====
+        // Try to detect server files and add their endpoints to monitoring
+        const discoveredEndpoints = [];
+        try {
+          const files = codeService.listFiles('', 2);
+          if (files.success && files.files) {
+            // Look for server/main files
+            const serverFiles = files.files.filter(f =>
+              f.type === 'file' &&
+              /server|main|app|index|api|route/i.test(f.name) &&
+              /\.(js|ts|py|go|rb|java)$/i.test(f.name)
+            );
+
+            // Add common backend paths as endpoints to monitor
+            const commonEndpoints = [
+              { url: 'https://api.github.com', method: 'GET', name: 'GitHub API', path: '/', headers: { 'Accept': 'application/vnd.github.v3+json' } },
+            ];
+
+            // Also try to detect the project's own server
+            if (data.path) {
+              // Default health endpoints for most web frameworks
+              const localEndpoints = [
+                { url: `http://localhost:3000/health`, method: 'GET', name: 'Local Health', path: '/health' },
+                { url: `http://localhost:3000/api/status`, method: 'GET', name: 'Local Status', path: '/api/status' },
+                { url: `http://localhost:3001/health`, method: 'GET', name: 'Backend Health', path: '/health' },
+                { url: `http://localhost:5173/`, method: 'GET', name: 'Vite Dev Server', path: '/' },
+                { url: `http://localhost:8000/health`, method: 'GET', name: 'Python Server', path: '/health' },
+                { url: `http://localhost:5000/health`, method: 'GET', name: 'Flask Server', path: '/health' },
+                { url: `http://localhost:8080/health`, method: 'GET', name: 'Java Server', path: '/health' },
+              ];
+
+              for (const ep of [...localEndpoints, ...commonEndpoints]) {
+                endpointMonitor.addEndpoint(ep.url, ep);
+                discoveredEndpoints.push(ep.name);
+              }
+            }
+          }
+        } catch (scanErr) {
+          logger.error('Auto-discover endpoints error:', scanErr.message);
+        }
+
+        // ===== AUTO-SCAN FOR ANOMALIES IN PROJECT LOGS (Fix #3) =====
+        let anomalyScanResult = null;
+        try {
+          const logScan = logParser.scanDirectory(data.path);
+          if (logScan.files && logScan.files.length > 0) {
+            // Parse the first log file and detect anomalies
+            for (const logFile of logScan.files.slice(0, 3)) {
+              const parsed = logParser.parseLogFile(logFile.path);
+              if (parsed.entries && parsed.entries.length > 0) {
+                const detectedAnomalies = anomalyDetector.analyzeLogFile(parsed);
+                if (detectedAnomalies.totalAnomalies > 0) {
+                  anomalyScanResult = anomalyScanResult || { totalAnomalies: 0, groups: {} };
+                  anomalyScanResult.totalAnomalies += detectedAnomalies.totalAnomalies;
+                  Object.assign(anomalyScanResult.groups, detectedAnomalies.groups);
+
+                  // Create alerts for detected anomalies
+                  for (const anomaly of detectedAnomalies.anomalies) {
+                    const alert = alertManager.processAnomaly({
+                      ...anomaly,
+                      source: 'project_scan',
+                    });
+                  }
+                }
+              }
+            }
+          }
+        } catch (scanErr) {
+          logger.error('Auto-scan anomaly error:', scanErr.message);
+        }
+
+        // ===== BROADCAST UPDATED STATE TO ALL CLIENTS =====
+        if (anomalyScanResult && anomalyScanResult.totalAnomalies > 0) {
+          io.emit('anomaly:new', {
+            count: anomalyScanResult.totalAnomalies,
+            summary: `Scanned ${data.path} and found ${anomalyScanResult.totalAnomalies} anomaly(ies)`,
+            criticalCount: 0,
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        // Broadcast updated alert and health state
+        io.emit('alerts:state', alertManager.getActiveAlerts());
+        io.emit('health:status', endpointMonitor.getStatus());
+
         socket.emit('project:selected', {
           path: data.path,
           ...result,
           starterFileCreated: createResult.success,
           starterFilePath: createResult.success ? createResult.relativePath : null,
           starterFileMessage: createResult.success ? 'Created example/first.py with To-Do List app' : null,
+          endpointsDiscovered: discoveredEndpoints.length,
+          anomaliesFound: anomalyScanResult?.totalAnomalies || 0,
         });
       } catch (error) {
         logger.error('Project selection error:', error.message);

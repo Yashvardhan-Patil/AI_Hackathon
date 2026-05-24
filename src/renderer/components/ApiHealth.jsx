@@ -40,7 +40,7 @@ const DEFAULT_ENDPOINTS = [
   { url: 'http://localhost:3001/api/status', method: 'GET', name: 'API Status', path: '/api/status' },
 ];
 
-function ApiHealth({ socket, connected, addToast }) {
+function ApiHealth({ socket, connected, addToast, isActive }) {
   const [endpoints, setEndpoints] = useState([]);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -66,8 +66,10 @@ function ApiHealth({ socket, connected, addToast }) {
 
     socket.on('health:status', handleHealthStatus);
 
-    // Initial fetch
-    fetchHealth();
+    // Fetch on mount and when tab becomes active
+    if (isActive) {
+      fetchHealth();
+    }
 
     return () => {
       socket.off('health:status', handleHealthStatus);

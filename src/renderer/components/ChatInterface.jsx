@@ -49,8 +49,7 @@ Every message goes through an **intent router** that automatically detects what 
   hasRootCause: false,
 };
 
-function ChatInterface({ socket, connected, projectPath, addToast }) {
-  const [messages, setMessages] = useState([WELCOME_MESSAGE]);
+function ChatInterface({ socket, connected, projectPath, addToast, messages, setMessages }) {
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
@@ -125,7 +124,7 @@ function ChatInterface({ socket, connected, projectPath, addToast }) {
     // EVERY message goes to the backend intent router — no commands, no parsing
     socket.emit('chat:message', {
       query: currentInput,
-      messages: [...messages, userMessage].map((m) => ({
+      messages: [...(messages || []), userMessage].map((m) => ({
         role: m.role,
         content: m.content,
       })),
@@ -195,7 +194,7 @@ function ChatInterface({ socket, connected, projectPath, addToast }) {
 
     socket.emit('chat:message', {
       query: text,
-      messages: [...messages, userMessage].map((m) => ({
+      messages: [...(messages || []), userMessage].map((m) => ({
         role: m.role,
         content: m.content,
       })),
@@ -207,7 +206,7 @@ function ChatInterface({ socket, connected, projectPath, addToast }) {
     <div className="flex flex-col h-full">
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto space-y-3 pb-2">
-        {messages.map((msg) => (
+        {(messages || []).map((msg) => (
           <div key={msg.id} className="animate-slide-up">
             {msg.role === 'user' ? (
               <div className="message-bubble-user">
