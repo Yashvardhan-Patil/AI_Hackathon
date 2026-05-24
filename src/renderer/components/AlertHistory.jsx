@@ -35,7 +35,7 @@ function AlertHistory({ socket, connected, isActive }) {
     socket.emit('alerts:get-history', { limit: 100 });
   };
 
-  // Socket listeners — stay alive forever
+  // Socket listeners — registered on mount, cleaned up on unmount
   useEffect(() => {
     if (!socket) return;
 
@@ -54,8 +54,10 @@ function AlertHistory({ socket, connected, isActive }) {
     socket.on('alerts:history', handleHistory);
     socket.on('alerts:resolved', handleResolved);
 
-    // Listeners stay alive forever
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      socket.off('alerts:history', handleHistory);
+      socket.off('alerts:resolved', handleResolved);
+    };
   }, [socket]);
 
   // Re-fetch history whenever this tab becomes active

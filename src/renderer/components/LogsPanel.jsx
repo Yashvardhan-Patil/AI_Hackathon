@@ -31,7 +31,7 @@ function LogsPanel({ socket, connected, projectPath, addToast, isActive }) {
     }
   }, [logs, autoScroll]);
 
-  // Socket listeners for real-time logs — stay alive forever
+  // Socket listeners for real-time logs — registered on mount, cleaned up on unmount
   useEffect(() => {
     if (!socket) return;
 
@@ -68,9 +68,11 @@ function LogsPanel({ socket, connected, projectPath, addToast, isActive }) {
     socket.on('logs:updated', handleLogsUpdated);
     socket.on('logs:errors-detected', handleErrorsDetected);
 
-    // Listeners stay alive forever — never clean up
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socket]);
+    return () => {
+      socket.off('logs:updated', handleLogsUpdated);
+      socket.off('logs:errors-detected', handleErrorsDetected);
+    };
+  }, [socket, addToast]);
 
   // Scan for log files when project is selected — single shot, no listener leak
   useEffect(() => {

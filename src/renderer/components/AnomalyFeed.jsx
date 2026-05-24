@@ -78,7 +78,8 @@ function AnomalyFeed({ socket, connected, addToast, isActive }) {
   const [filter, setFilter] = useState('all');
   const [aiAnalyses, setAiAnalyses] = useState({});
 
-  // Socket listeners — stay alive FOREVER so we never miss real-time data
+  // Socket listeners — registered on mount, cleaned up on unmount
+  // This prevents duplicate listeners from accumulating when switching tabs
   useEffect(() => {
     if (!socket) return;
 
@@ -99,7 +100,7 @@ function AnomalyFeed({ socket, connected, addToast, isActive }) {
         `${data.count} anomaly(ies) detected${data.criticalCount > 0 ? ` (${data.criticalCount} critical)` : ''}`,
         data.alert?.severity || (data.criticalCount > 0 ? 'error' : 'warning')
       );
-      // Also update local state in case we missed the alerts:state broadcast
+      // Fetch current state when a new anomaly arrives
       if (data.alert) {
         socket.emit('alerts:get-active');
       }
@@ -121,9 +122,12 @@ function AnomalyFeed({ socket, connected, addToast, isActive }) {
     // Initial fetch
     socket.emit('alerts:get-active');
 
-    // NEVER clean up — these listeners stay for the lifetime of the component
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [socket]);
+    return () => {
+      socket.off('alerts:state', handleState);
+      socket.off('anomaly:new', handleNew);
+      socket.off('anomaly:ai-analysis', handleAiAnalysis);
+    };
+  }, [socket, addToast]);
 
   // Re-fetch data whenever this tab becomes active (catches up on missed updates)
   useEffect(() => {

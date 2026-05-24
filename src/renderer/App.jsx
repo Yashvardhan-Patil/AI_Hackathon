@@ -146,6 +146,18 @@ function App() {
       addToast(`${data.count} error(s) detected in ${data.fileName}`, 'error');
     });
 
+    newSocket.on('anomaly:new', (data) => {
+      // Show toast for anomalies regardless of which tab is active
+      if (data.alert) {
+        addToast(
+          data.alert.message || data.summary || 'Anomaly detected',
+          data.alert.severity === 'critical' ? 'error' : 'warning'
+        );
+      } else if (data.count && data.summary) {
+        addToast(data.summary, data.criticalCount > 0 ? 'error' : 'warning');
+      }
+    });
+
     newSocket.on('monitor:error', (data) => {
       addToast(`Monitor error: ${data.error}`, 'error');
     });
