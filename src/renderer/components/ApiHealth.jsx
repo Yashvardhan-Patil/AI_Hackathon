@@ -54,6 +54,7 @@ function ApiHealth({ socket, connected, addToast, isActive }) {
     socket.emit('health:check');
   }, [socket]);
 
+  // Socket listeners — stay alive FOREVER so we never miss health updates
   useEffect(() => {
     if (!socket) return;
 
@@ -66,15 +67,18 @@ function ApiHealth({ socket, connected, addToast, isActive }) {
 
     socket.on('health:status', handleHealthStatus);
 
-    // Fetch on mount and whenever this tab becomes active
-    if (isActive) {
-      fetchHealth();
-    }
+    // Initial fetch
+    fetchHealth();
 
-    return () => {
-      socket.off('health:status', handleHealthStatus);
-    };
-  }, [socket, fetchHealth, isActive]);
+    // NEVER clean up — listeners stay for component lifetime
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket]);
+
+  // Re-fetch whenever this tab becomes active (catches up on missed updates)
+  useEffect(() => {
+    if (!socket || !isActive) return;
+    fetchHealth();
+  }, [socket, isActive, fetchHealth]);
 
   // Auto-refresh every 30 seconds
   useEffect(() => {

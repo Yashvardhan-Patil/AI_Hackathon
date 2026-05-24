@@ -13,7 +13,7 @@ import {
   Download,
 } from 'lucide-react';
 
-function LogsPanel({ socket, connected, projectPath, addToast }) {
+function LogsPanel({ socket, connected, projectPath, addToast, isActive }) {
   const [logs, setLogs] = useState([]);
   const [filter, setFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -31,7 +31,7 @@ function LogsPanel({ socket, connected, projectPath, addToast }) {
     }
   }, [logs, autoScroll]);
 
-  // Socket listeners for real-time logs
+  // Socket listeners for real-time logs — stay alive forever
   useEffect(() => {
     if (!socket) return;
 
@@ -68,26 +68,34 @@ function LogsPanel({ socket, connected, projectPath, addToast }) {
     socket.on('logs:updated', handleLogsUpdated);
     socket.on('logs:errors-detected', handleErrorsDetected);
 
-    return () => {
-      socket.off('logs:updated', handleLogsUpdated);
-      socket.off('logs:errors-detected', handleErrorsDetected);
-    };
-  }, [socket, addToast]);
+    // Listeners stay alive forever — never clean up
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket]);
 
-  // Scan for log files when project is selected
+  // Scan for log files when project is selected — single shot, no listener leak
   useEffect(() => {
-    if (socket && projectPath) {
-      socket.emit('project:scan-logs', { path: projectPath });
-      socket.on('project:log-files', (data) => {
-        if (data.files) {
-          setLogFiles(data.files);
-        }
-      });
-      return () => {
-        socket.off('project:log-files');
-      };
-    }
+    if (!socket || !projectPath) return;
+
+    socket.emit('project:scan-logs', { path: projectPath });
+
+    const handleLogFiles = (data) => {
+      if (data.files) {
+        setLogFiles(data.files);
+      }
+    };
+
+    socket.on('project:log-files', handleLogFiles);
+
+    return () => {
+      socket.off('project:log-files', handleLogFiles);
+    };
   }, [socket, projectPath]);
+
+  // Re-scan logs when tab becomes active
+  useEffect(() => {
+    if (!socket || !projectPath || !isActive) return;
+    socket.emit('project:scan-logs', { path: projectPath });
+  }, [socket, projectPath, isActive]);
 
   const handleFileSelect = (filePath) => {
     if (!socket) return;

@@ -12,11 +12,9 @@ const webService = require('./webService');
 const logger = require('../utils/logger');
 
 let fileMonitor = null;
+// Only monitor endpoints that actually exist — the backend's own health endpoint
 const MONITORED_ENDPOINTS = [
-  { method: 'GET', path: '/api/users', name: 'GET /api/users', url: 'http://localhost:3001/health' },
-  { method: 'GET', path: '/api/products', name: 'GET /api/products', url: 'http://localhost:3001/api/status' },
-  { method: 'POST', path: '/api/auth/login', name: 'POST /api/auth/login', url: 'http://localhost:3001/health' },
-  { method: 'GET', path: '/api/analytics', name: 'GET /api/analytics', url: 'http://localhost:3001/health' },
+  { method: 'GET', path: '/health', name: 'Backend Health', url: 'http://localhost:3001/health' },
 ];
 
 function setupSocketHandlers(io) {
@@ -329,27 +327,16 @@ function setupSocketHandlers(io) {
             );
 
             // Add common backend paths as endpoints to monitor
-            const commonEndpoints = [
-              { url: 'https://api.github.com', method: 'GET', name: 'GitHub API', path: '/', headers: { 'Accept': 'application/vnd.github.v3+json' } },
+            // Only add ones that are likely to actually exist — port 3001 (our backend)
+            // and 5173 (Vite dev server if running)
+            const autoEndpoints = [
+              { url: `http://localhost:3001/health`, method: 'GET', name: 'Backend Health', path: '/health' },
+              { url: `http://localhost:5173/`, method: 'GET', name: 'Vite Dev Server', path: '/' },
             ];
 
-            // Also try to detect the project's own server
-            if (data.path) {
-              // Default health endpoints for most web frameworks
-              const localEndpoints = [
-                { url: `http://localhost:3000/health`, method: 'GET', name: 'Local Health', path: '/health' },
-                { url: `http://localhost:3000/api/status`, method: 'GET', name: 'Local Status', path: '/api/status' },
-                { url: `http://localhost:3001/health`, method: 'GET', name: 'Backend Health', path: '/health' },
-                { url: `http://localhost:5173/`, method: 'GET', name: 'Vite Dev Server', path: '/' },
-                { url: `http://localhost:8000/health`, method: 'GET', name: 'Python Server', path: '/health' },
-                { url: `http://localhost:5000/health`, method: 'GET', name: 'Flask Server', path: '/health' },
-                { url: `http://localhost:8080/health`, method: 'GET', name: 'Java Server', path: '/health' },
-              ];
-
-              for (const ep of [...localEndpoints, ...commonEndpoints]) {
-                endpointMonitor.addEndpoint(ep.url, ep);
-                discoveredEndpoints.push(ep.name);
-              }
+            for (const ep of autoEndpoints) {
+              endpointMonitor.addEndpoint(ep.url, ep);
+              discoveredEndpoints.push(ep.name);
             }
           }
         } catch (scanErr) {

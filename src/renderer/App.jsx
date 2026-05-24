@@ -321,6 +321,7 @@ function App() {
             connected={connected}
             projectPath={projectPath}
             addToast={addToast}
+            isActive={activeTab === 'logs'}
           />
         );
       case 'health':
@@ -333,7 +334,13 @@ function App() {
           />
         );
       case 'history':
-        return <AlertHistory socket={socket} connected={connected} />;
+        return (
+          <AlertHistory
+            socket={socket}
+            connected={connected}
+            isActive={activeTab === 'history'}
+          />
+        );
       case 'settings':
         return (
           <Settings

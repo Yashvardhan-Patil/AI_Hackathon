@@ -78,11 +78,10 @@ function AnomalyFeed({ socket, connected, addToast, isActive }) {
   const [filter, setFilter] = useState('all');
   const [aiAnalyses, setAiAnalyses] = useState({});
 
-  // Load initial state and refresh when tab becomes active
+  // Socket listeners — stay alive FOREVER so we never miss real-time data
   useEffect(() => {
     if (!socket) return;
 
-    // Always listen for real-time updates
     const handleState = (data) => {
       setAlerts(data.alerts || []);
       setSummary({
@@ -95,11 +94,14 @@ function AnomalyFeed({ socket, connected, addToast, isActive }) {
     };
 
     const handleNew = (data) => {
+      addToast(
+        data.alert ? data.alert.message || data.summary || 'Anomaly detected' :
+        `${data.count} anomaly(ies) detected${data.criticalCount > 0 ? ` (${data.criticalCount} critical)` : ''}`,
+        data.alert?.severity || (data.criticalCount > 0 ? 'error' : 'warning')
+      );
+      // Also update local state in case we missed the alerts:state broadcast
       if (data.alert) {
-        addToast(data.alert.message || data.summary || 'Anomaly detected', data.alert.severity || 'error');
-      } else if (data.count > 0) {
-        const label = data.criticalCount > 0 ? 'error' : 'warning';
-        addToast(`${data.count} anomaly(ies) detected${data.criticalCount > 0 ? ` (${data.criticalCount} critical)` : ''}`, label);
+        socket.emit('alerts:get-active');
       }
     };
 
@@ -116,17 +118,18 @@ function AnomalyFeed({ socket, connected, addToast, isActive }) {
     socket.on('anomaly:new', handleNew);
     socket.on('anomaly:ai-analysis', handleAiAnalysis);
 
-    // Re-fetch data whenever this tab becomes active
-    if (isActive) {
-      socket.emit('alerts:get-active');
-    }
+    // Initial fetch
+    socket.emit('alerts:get-active');
 
-    return () => {
-      socket.off('alerts:state', handleState);
-      socket.off('anomaly:new', handleNew);
-      socket.off('anomaly:ai-analysis', handleAiAnalysis);
-    };
-  }, [socket, addToast, isActive]); // isActive is now in deps — re-fetches on tab switch
+    // NEVER clean up — these listeners stay for the lifetime of the component
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socket]);
+
+  // Re-fetch data whenever this tab becomes active (catches up on missed updates)
+  useEffect(() => {
+    if (!socket || !isActive) return;
+    socket.emit('alerts:get-active');
+  }, [socket, isActive]);
 
   const handleResolve = useCallback((alertId) => {
     if (!socket) return;

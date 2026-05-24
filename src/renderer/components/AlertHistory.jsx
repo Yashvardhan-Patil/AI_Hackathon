@@ -22,7 +22,7 @@ const SEVERITY_CONFIG = {
   low: { icon: Shield, color: 'text-gray-400', bg: 'bg-gray-500/5', label: 'Low' },
 };
 
-function AlertHistory({ socket, connected }) {
+function AlertHistory({ socket, connected, isActive }) {
   const [history, setHistory] = useState([]);
   const [filter, setFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -35,6 +35,7 @@ function AlertHistory({ socket, connected }) {
     socket.emit('alerts:get-history', { limit: 100 });
   };
 
+  // Socket listeners — stay alive forever
   useEffect(() => {
     if (!socket) return;
 
@@ -42,23 +43,26 @@ function AlertHistory({ socket, connected }) {
 
     const handleHistory = (data) => {
       setHistory(data.alerts || []);
-    };
-
-    socket.on('alerts:history', (data) => {
-      setHistory(data.alerts || []);
       setIsLoading(false);
-    });
+    };
 
     // Refresh when alerts are resolved
-    socket.on('alerts:resolved', () => {
+    const handleResolved = () => {
       fetchHistory();
-    });
-
-    return () => {
-      socket.off('alerts:history');
-      socket.off('alerts:resolved');
     };
+
+    socket.on('alerts:history', handleHistory);
+    socket.on('alerts:resolved', handleResolved);
+
+    // Listeners stay alive forever
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [socket]);
+
+  // Re-fetch history whenever this tab becomes active
+  useEffect(() => {
+    if (!socket || !isActive) return;
+    fetchHistory();
+  }, [socket, isActive]);
 
   const filteredHistory = history.filter((alert) => {
     if (filter !== 'all' && alert.severity !== filter) return false;
